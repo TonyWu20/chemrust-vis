@@ -47,6 +47,7 @@ impl Scene {
 
         let atoms = if let Some(cell) = &structure.cell {
             let tensor = cell.tensor();
+            let boundary_margin: f64 = 0.15;
 
             let mut atoms = Vec::new();
 
@@ -56,52 +57,53 @@ impl Scene {
                 .zip(structure.frac_coords.iter())
                 .enumerate()
             {
-                let base_color = element_color(element);
-                // Fractional coords of this atom
+                let color = element_color(element);
                 let fx = fc.0.x;
                 let fy = fc.0.y;
                 let fz = fc.0.z;
 
-                // Generate replicas: shift by -1, 0, +1 in each cell direction.
-                // Keep replicas whose fractional coords fall within [-margin, 1+margin].
-                // The "0,0,0" shift is the original atom (not a replica).
-                let margin: f64 = 0.25;
+                // Always include the original atom
+                let p = tensor * fc.0;
+                atoms.push(AtomDrawData {
+                    position: [p.x, p.y, p.z],
+                    color,
+                    element,
+                    atom_index: i,
+                    is_periodic_image: false,
+                });
 
-                for di in -1..=1_i32 {
-                    for dj in -1..=1_i32 {
-                        for dk in -1..=1_i32 {
-                            let sfx = fx + di as f64;
-                            let sfy = fy + dj as f64;
-                            let sfz = fz + dk as f64;
+                // Generate boundary replicas: only for atoms near a cell face.
+                // Include 0 in each shift list so we get all face/edge/corner
+                // combinations, then filter out the (0,0,0) original.
+                let mut x_shifts = vec![0.0];
+                if fx < boundary_margin { x_shifts.push(1.0); }
+                if fx > 1.0 - boundary_margin { x_shifts.push(-1.0); }
 
-                            // Filter: keep only atoms within expanded fractional range
-                            if sfx < -margin || sfx > 1.0 + margin
-                                || sfy < -margin || sfy > 1.0 + margin
-                                || sfz < -margin || sfz > 1.0 + margin
-                            {
-                                continue;
+                let mut y_shifts = vec![0.0];
+                if fy < boundary_margin { y_shifts.push(1.0); }
+                if fy > 1.0 - boundary_margin { y_shifts.push(-1.0); }
+
+                let mut z_shifts = vec![0.0];
+                if fz < boundary_margin { z_shifts.push(1.0); }
+                if fz > 1.0 - boundary_margin { z_shifts.push(-1.0); }
+
+                for &dx in &x_shifts {
+                    for &dy in &y_shifts {
+                        for &dz in &z_shifts {
+                            if dx == 0.0 && dy == 0.0 && dz == 0.0 {
+                                continue; // original atom already added above
                             }
-
-                            let is_replica = di != 0 || dj != 0 || dk != 0;
-
-                            // Convert shifted fractional → Cartesian
+                            let sfx = fx + dx;
+                            let sfy = fy + dy;
+                            let sfz = fz + dz;
                             let fc_shifted = nalgebra::Point3::new(sfx, sfy, sfz);
                             let p = tensor * fc_shifted;
-                            let position = [p.x, p.y, p.z];
-
-                            // Periodic images get a dimmed color
-                            let color = if is_replica {
-                                dim_color(base_color, 0.4)
-                            } else {
-                                base_color
-                            };
-
                             atoms.push(AtomDrawData {
-                                position,
+                                position: [p.x, p.y, p.z],
                                 color,
                                 element,
                                 atom_index: i,
-                                is_periodic_image: is_replica,
+                                is_periodic_image: true,
                             });
                         }
                     }
@@ -190,15 +192,6 @@ fn build_cell_edges(cell: &chemrust_geometry::LatticeVectors) -> Vec<([f64; 3], 
         .iter()
         .map(|&(i, j)| (corners[i], corners[j]))
         .collect()
-}
-
-/// Dim an RGB color by a factor (0.0 = black, 1.0 = unchanged).
-fn dim_color(color: RgbColor, factor: f64) -> RgbColor {
-    RgbColor(
-        (color.0 as f64 * factor) as u8,
-        (color.1 as f64 * factor) as u8,
-        (color.2 as f64 * factor) as u8,
-    )
 }
 
 /// Map an element symbol to a renderer-agnostic RGB color.
