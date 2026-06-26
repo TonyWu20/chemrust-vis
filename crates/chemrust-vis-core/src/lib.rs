@@ -6,6 +6,7 @@
 pub mod camera;
 pub mod scene;
 pub mod viewport;
+pub mod mcp;
 
 #[cfg(feature = "castep-loader")]
 pub mod loader;

@@ -24,6 +24,10 @@ struct Cli {
     /// Path to a CASTEP .cell file to visualize.
     #[arg(value_name = "FILE")]
     file: PathBuf,
+
+    /// Run in MCP (Model Context Protocol) server mode instead of TUI.
+    #[arg(long)]
+    mcp: bool,
 }
 
 fn main() -> Result<()> {
@@ -32,6 +36,15 @@ fn main() -> Result<()> {
     // Load the structure from the cell file.
     let structure = CellLoader::load(&cli.file)
         .with_context(|| format!("Failed to load cell file: {}", cli.file.display()))?;
+
+    let scene = Scene::from_structure(&structure);
+
+    if cli.mcp {
+        // Run MCP server — blocks on stdin/stdout JSON-RPC.
+        eprintln!("chemrust-vis MCP server started. Waiting for client...");
+        chemrust_vis_core::mcp::run_mcp_server(scene)?;
+        return Ok(());
+    }
 
     // Print structure summary for verification.
     eprintln!("Loaded: {} atoms", structure.num_atoms());
@@ -43,9 +56,7 @@ fn main() -> Result<()> {
         eprintln!("  b = ({:.4}, {:.4}, {:.4})", t[(0,1)], t[(1,1)], t[(2,1)]);
         eprintln!("  c = ({:.4}, {:.4}, {:.4})", t[(0,2)], t[(1,2)], t[(2,2)]);
     }
-    // Print first 3 atom positions in Cartesian
-    let scene = Scene::from_structure(&structure);
-    for (i, atom) in scene.atoms.iter().take(3).enumerate() {
+    for (i, atom) in scene.atoms.iter().filter(|a| !a.is_periodic_image).take(3).enumerate() {
         let el = format!("{:?}", atom.element);
         eprintln!(
             "  atom[{}] {} at ({:.4}, {:.4}, {:.4})",
