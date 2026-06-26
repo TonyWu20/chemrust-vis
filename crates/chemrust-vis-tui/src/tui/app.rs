@@ -7,7 +7,6 @@ use chemrust_vis_core::camera::Camera;
 use chemrust_vis_core::scene::Scene;
 use chemrust_vis_core::viewport::Viewport;
 use crossterm::event::{self, Event};
-use nalgebra::Point3;
 use ratatui::{
     layout::{Constraint, Direction, Layout},
     Terminal,
@@ -30,14 +29,13 @@ impl App {
     /// Create a new App from a loaded scene and file path.
     pub fn new(scene: Scene, file_path: PathBuf) -> Self {
         let center = scene.bounding_box_center();
-        let center_pt = Point3::new(center[0], center[1], center[2]);
 
         // Compute initial camera: auto-frame the structure.
         let (min, max) = bounding_box_corners(&scene);
         let diag = ((max[0] - min[0]).powi(2) + (max[1] - min[1]).powi(2) + (max[2] - min[2]).powi(2)).sqrt();
         let radius = (diag * 0.75).max(1.0);
 
-        let camera = Camera::new(center_pt, radius);
+        let camera = Camera::from_target(center, radius);
 
         App {
             scene,

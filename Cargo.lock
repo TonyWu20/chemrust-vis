@@ -261,7 +261,6 @@ dependencies = [
  "chemrust-vis-core",
  "clap",
  "crossterm",
- "nalgebra",
  "ratatui",
 ]
 

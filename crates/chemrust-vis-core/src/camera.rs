@@ -28,6 +28,12 @@ impl Camera {
         }
     }
 
+    /// Create a camera looking at a target specified as [x, y, z].
+    /// Convenience constructor so callers don't need to depend on nalgebra.
+    pub fn from_target(target: [f64; 3], radius: f64) -> Self {
+        Camera::new(Point3::new(target[0], target[1], target[2]), radius)
+    }
+
     /// Create a camera with explicit angles.
     pub fn with_angles(target: Point3<f64>, radius: f64, theta: f64, phi: f64) -> Self {
         Camera {

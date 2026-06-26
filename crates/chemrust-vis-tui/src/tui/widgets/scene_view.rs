@@ -159,7 +159,8 @@ impl<'a> Widget for SceneWidget<'a> {
         for pt in &self.draw_commands.points {
             let cx = (pt.x - min_x) * fit_scale + offset_x;
             let cy = (pt.y - min_y) * fit_scale + offset_y;
-            grid.set_dot(cx, cy, Color::White);
+            let color = rgb_to_ratatui(pt.color);
+            grid.set_dot(cx, cy, color);
         }
 
         // Render grid to buffer

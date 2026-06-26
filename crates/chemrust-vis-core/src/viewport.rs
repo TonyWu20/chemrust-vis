@@ -18,6 +18,8 @@ pub struct DrawPoint {
     pub y: f64,
     /// View-space Z for depth verification.
     pub z_view: f64,
+    /// Renderer-agnostic color from the scene's element color map.
+    pub color: crate::scene::RgbColor,
     /// Index into the scene's atoms array (and original Structure).
     pub atom_index: usize,
 }
@@ -72,6 +74,7 @@ impl Viewport {
                     x: self.ndc_to_canvas_x(ndc.x),
                     y: self.ndc_to_canvas_y(ndc.y),
                     z_view,
+                    color: atom.color,
                     atom_index: atom.atom_index,
                 };
                 (dp, z_view)
