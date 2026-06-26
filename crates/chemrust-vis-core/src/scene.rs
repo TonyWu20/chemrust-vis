@@ -150,8 +150,8 @@ impl Scene {
 
     /// Return the best center for camera framing.
     ///
-    /// Uses the bounding box center of original (non-periodic) atoms only.
-    /// Periodic replicas are excluded so they don't skew the centroid.
+    /// Uses the axis-aligned bounding box midpoint of original atoms.
+    /// This gives a geometrically centered view regardless of atom clustering.
     pub fn center_for_view(&self) -> [f64; 3] {
         let originals: Vec<&AtomDrawData> = self
             .atoms
@@ -161,14 +161,19 @@ impl Scene {
         if originals.is_empty() {
             return self.bounding_box_center();
         }
-        let n = originals.len() as f64;
-        let mut sum = [0.0; 3];
-        for atom in originals {
-            sum[0] += atom.position[0];
-            sum[1] += atom.position[1];
-            sum[2] += atom.position[2];
+        let mut min = [f64::INFINITY; 3];
+        let mut max = [f64::NEG_INFINITY; 3];
+        for atom in &originals {
+            for i in 0..3 {
+                min[i] = min[i].min(atom.position[i]);
+                max[i] = max[i].max(atom.position[i]);
+            }
         }
-        [sum[0] / n, sum[1] / n, sum[2] / n]
+        [
+            (min[0] + max[0]) / 2.0,
+            (min[1] + max[1]) / 2.0,
+            (min[2] + max[2]) / 2.0,
+        ]
     }
 }
 

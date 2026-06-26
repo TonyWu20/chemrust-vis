@@ -99,13 +99,12 @@ impl Viewport {
 
         let data_w = (max_x - min_x).max(1.0);
         let data_h = (max_y - min_y).max(1.0);
-        // Scale to fill 80% of viewport, preserving aspect ratio
+        // Scale to fill 85% of viewport, preserving aspect ratio
         let margin = 0.85;
         let scale = (self.width * margin / data_w).min(self.height * margin / data_h);
-        // Center on the camera's optical axis (view-space origin).
-        // The camera target projects to (0, 0) in view-space XY.
-        // Pan shifts the target, which shifts all view-space positions,
-        // so the data bounding box moves and the structure pans on screen.
+        // Center on camera's optical axis (0,0 in view-space XY).
+        // The camera target maps to the viewport center.
+        // Pan → target moves → view-space positions shift → structure pans.
         let cx = self.width / 2.0;
         let cy = self.height / 2.0;
         // Atom radius: 5% of viewport shorter dimension, scaled to world units
