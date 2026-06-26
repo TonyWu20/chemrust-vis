@@ -41,6 +41,18 @@ pub fn rgb_to_ratatui(color: RgbColor) -> Color {
     Color::Rgb(color.0, color.1, color.2)
 }
 
+/// Shade a ratatui Color by an intensity factor (0.0 = black, 1.0 = full color).
+fn shade_color(color: Color, intensity: f64) -> Color {
+    if let Color::Rgb(r, g, b) = color {
+        let sr = (r as f64 * intensity) as u8;
+        let sg = (g as f64 * intensity) as u8;
+        let sb = (b as f64 * intensity) as u8;
+        Color::Rgb(sr, sg, sb)
+    } else {
+        color
+    }
+}
+
 /// A grid of Braille characters with per-cell colors.
 struct BrailleGrid {
     /// Unicode Braille code points for each character cell.
@@ -72,14 +84,53 @@ impl BrailleGrid {
         }
     }
 
-    /// Draw a filled circle on the grid.
-    fn fill_circle(&mut self, cx: f64, cy: f64, radius: f64, color: Color) {
+    /// Draw a shaded sphere on the grid using limb darkening and specular highlight.
+    ///
+    /// Dots near the sphere center are bright (facing the viewer). Dots near the
+    /// edge are darker (grazing angle). A specular highlight adds a 3D glossy look.
+    fn fill_circle(&mut self, cx: f64, cy: f64, radius: f64, base_color: Color) {
         let r = radius.ceil() as i64;
+        if r < 1 {
+            self.set_dot(cx, cy, base_color);
+            return;
+        }
         for dy in -r..=r {
             for dx in -r..=r {
-                if (dx as f64).powi(2) + (dy as f64).powi(2) <= radius.powi(2) {
-                    self.set_dot(cx + dx as f64, cy + dy as f64, color);
+                let d2 = (dx as f64).powi(2) + (dy as f64).powi(2);
+                let r2 = radius.powi(2);
+                if d2 > r2 {
+                    continue;
                 }
+                // Normalized distance from center (0 = center, 1 = edge)
+                let d = d2.sqrt() / radius;
+                // Z-component of sphere surface normal at this point
+                let z = (1.0 - d.powi(2)).max(0.0).sqrt();
+                // Surface normal (pointing outward): (nx, ny, nz)
+                let nx = (dx as f64) / radius;
+                let ny = (dy as f64) / radius;
+                let nz = z;
+                // Light direction (upper-left-front)
+                let lx: f64 = 0.5;
+                let ly: f64 = -0.5;
+                let lz: f64 = 0.707;
+                let l_norm = f64::sqrt(lx * lx + ly * ly + lz * lz);
+                // Lambertian diffuse
+                let n_dot_l = (nx * lx + ny * ly + nz * lz) / l_norm;
+                let diffuse = n_dot_l.max(0.0);
+                // Specular (Blinn-Phong): half-vector between light and view (0,0,1)
+                let hx = lx / l_norm;
+                let hy = ly / l_norm;
+                let hz = (lz / l_norm + 1.0) / 2.0; // approximate half-vector
+                let h_norm = (hx * hx + hy * hy + hz * hz).sqrt();
+                let n_dot_h = (nx * hx + ny * hy + nz * hz) / h_norm;
+                let specular = n_dot_h.max(0.0).powi(16) * 0.6;
+                // Combined intensity: ambient + diffuse + specular
+                let ambient = 0.25;
+                let intensity = (ambient + diffuse * 0.55 + specular).min(1.0);
+
+                // Modulate base color by intensity
+                let shaded = shade_color(base_color, intensity);
+                self.set_dot(cx + dx as f64, cy + dy as f64, shaded);
             }
         }
     }
