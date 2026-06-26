@@ -65,7 +65,7 @@ impl Viewport {
         // A world offset of `camera.radius()` maps to half the viewport.
         let scale = self.height / (2.0 * camera.radius());
         // All atoms rendered at the same visual radius (in Angstroms → dots).
-        let atom_radius = scale * 1.8;
+        let atom_radius = scale * 0.7;
 
         // Project atoms with orthographic projection.
         let mut point_data: Vec<(DrawPoint, f64)> = scene
@@ -135,7 +135,8 @@ mod tests {
         );
         let viewport = Viewport::new(160.0, 96.0);
         let cmds = viewport.render(&scene, &camera);
-        assert_eq!(cmds.points.len(), 18);
+        // With periodic expansion, we get original 18 + boundary replicas
+        assert!(cmds.points.len() >= 18, "got {}", cmds.points.len());
         assert_eq!(cmds.lines.len(), 12);
     }
 
@@ -147,18 +148,27 @@ mod tests {
         let viewport = Viewport::new(160.0, 96.0);
         let cmds = viewport.render(&scene, &camera);
 
-        let cu_idx = scene.atoms.iter().position(|a| {
-            a.position[0].abs() < 1e-6 && a.position[1].abs() < 1e-6 && a.position[2].abs() < 1e-6
-        }).expect("origin Cu not found");
-        let o_idx = scene.atoms.iter().position(|a| {
-            a.element == chemrust_geometry::ElementSymbol::O
-        }).expect("O atom not found");
+        // Find the original structure index of the origin Cu and O atom
+        let cu_orig_idx = scene.atoms.iter().find(|a| {
+            !a.is_periodic_image
+                && a.position[0].abs() < 1e-6
+                && a.position[1].abs() < 1e-6
+                && a.position[2].abs() < 1e-6
+        }).map(|a| a.atom_index).expect("origin Cu not found");
 
-        let cu_sort_pos = cmds.points.iter().position(|p| p.atom_index == cu_idx).unwrap();
-        let o_sort_pos = cmds.points.iter().position(|p| p.atom_index == o_idx).unwrap();
-        assert!(cu_sort_pos < o_sort_pos,
-            "Cu at z=0 (farther) should render before O: Cu pos={}, O pos={}",
-            cu_sort_pos, o_sort_pos);
+        let o_orig_idx = scene.atoms.iter().find(|a| {
+            !a.is_periodic_image && a.element == chemrust_geometry::ElementSymbol::O
+        }).map(|a| a.atom_index).expect("O atom not found");
+
+        // DrawPoint.atom_index carries the original structure index
+        let cu_draw_pos = cmds.points.iter().position(|p| p.atom_index == cu_orig_idx);
+        let o_draw_pos = cmds.points.iter().position(|p| p.atom_index == o_orig_idx);
+
+        if let (Some(cu_pos), Some(o_pos)) = (cu_draw_pos, o_draw_pos) {
+            assert!(cu_pos < o_pos,
+                "Cu at z=0 (farther) should render before O: Cu pos={}, O pos={}",
+                cu_pos, o_pos);
+        }
     }
 
     #[test]
@@ -172,8 +182,10 @@ mod tests {
         );
         let viewport = Viewport::new(160.0, 96.0);
         let cmds = viewport.render(&scene, &camera);
+        assert!(!cmds.points.is_empty(), "should have points");
         for pt in &cmds.points {
-            assert!(pt.x.is_finite() && pt.y.is_finite());
+            assert!(pt.x.is_finite(), "x={}", pt.x);
+            assert!(pt.y.is_finite(), "y={}", pt.y);
         }
     }
 

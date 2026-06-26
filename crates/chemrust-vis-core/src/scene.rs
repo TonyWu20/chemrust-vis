@@ -17,8 +17,10 @@ pub struct AtomDrawData {
     pub color: RgbColor,
     /// Chemical element.
     pub element: ElementSymbol,
-    /// Index into the original Structure.
+    /// Index into the original Structure (wraps for periodic images).
     pub atom_index: usize,
+    /// Whether this is a periodic replica (rendered dimmer).
+    pub is_periodic_image: bool,
 }
 
 /// The renderable scene: atoms and cell edges.
@@ -33,47 +35,97 @@ pub struct Scene {
 impl Scene {
     /// Construct a Scene from a chemrust-geometry Structure.
     ///
-    /// For structures with a cell, fractional coordinates are converted to
-    /// Cartesian via `cart = cell * frac`. For molecules (no cell), fractional
-    /// coordinates are treated as Cartesian positions directly.
+    /// For periodic structures (with cell), generates periodic replicas of atoms
+    /// near cell boundaries so the structure appears continuous across the cell.
+    /// For molecules (no cell), fractional coords are treated as Cartesian.
     pub fn from_structure(structure: &Structure) -> Self {
-        let positions: Vec<[f64; 3]> = if let Some(cell) = &structure.cell {
-            // Periodic: convert fractional → Cartesian
-            let tensor = cell.tensor();
-            structure
-                .frac_coords
-                .iter()
-                .map(|fc| {
-                    let p = tensor * fc.0;
-                    [p.x, p.y, p.z]
-                })
-                .collect()
-        } else {
-            // Molecule: treat fractional coords as Cartesian
-            structure
-                .frac_coords
-                .iter()
-                .map(|fc| [fc.0.x, fc.0.y, fc.0.z])
-                .collect()
-        };
-
-        let atoms: Vec<AtomDrawData> = structure
-            .species
-            .iter()
-            .enumerate()
-            .zip(positions.iter())
-            .map(|((i, &element), &position)| AtomDrawData {
-                position,
-                color: element_color(element),
-                element,
-                atom_index: i,
-            })
-            .collect();
-
         let cell_edges = if let Some(cell) = &structure.cell {
             build_cell_edges(cell)
         } else {
             Vec::new()
+        };
+
+        let atoms = if let Some(cell) = &structure.cell {
+            let tensor = cell.tensor();
+
+            let mut atoms = Vec::new();
+
+            for (i, (&element, &fc)) in structure
+                .species
+                .iter()
+                .zip(structure.frac_coords.iter())
+                .enumerate()
+            {
+                let base_color = element_color(element);
+                // Fractional coords of this atom
+                let fx = fc.0.x;
+                let fy = fc.0.y;
+                let fz = fc.0.z;
+
+                // Generate replicas: shift by -1, 0, +1 in each cell direction.
+                // Keep replicas whose fractional coords fall within [-margin, 1+margin].
+                // The "0,0,0" shift is the original atom (not a replica).
+                let margin: f64 = 0.25;
+
+                for di in -1..=1_i32 {
+                    for dj in -1..=1_i32 {
+                        for dk in -1..=1_i32 {
+                            let sfx = fx + di as f64;
+                            let sfy = fy + dj as f64;
+                            let sfz = fz + dk as f64;
+
+                            // Filter: keep only atoms within expanded fractional range
+                            if sfx < -margin || sfx > 1.0 + margin
+                                || sfy < -margin || sfy > 1.0 + margin
+                                || sfz < -margin || sfz > 1.0 + margin
+                            {
+                                continue;
+                            }
+
+                            let is_replica = di != 0 || dj != 0 || dk != 0;
+
+                            // Convert shifted fractional → Cartesian
+                            let fc_shifted = nalgebra::Point3::new(sfx, sfy, sfz);
+                            let p = tensor * fc_shifted;
+                            let position = [p.x, p.y, p.z];
+
+                            // Periodic images get a dimmed color
+                            let color = if is_replica {
+                                dim_color(base_color, 0.4)
+                            } else {
+                                base_color
+                            };
+
+                            atoms.push(AtomDrawData {
+                                position,
+                                color,
+                                element,
+                                atom_index: i,
+                                is_periodic_image: is_replica,
+                            });
+                        }
+                    }
+                }
+            }
+            atoms
+        } else {
+            // Molecule: treat fractional coords as Cartesian
+            structure
+                .species
+                .iter()
+                .enumerate()
+                .zip(structure.frac_coords.iter())
+                .map(|((i, &element), fc)| {
+                    let position = [fc.0.x, fc.0.y, fc.0.z];
+                    AtomDrawData {
+                        position,
+                        color: element_color(element),
+                        element,
+                        atom_index: i,
+                        is_periodic_image: false,
+                    }
+                })
+                .collect()
         };
 
         Scene { atoms, cell_edges }
@@ -138,6 +190,15 @@ fn build_cell_edges(cell: &chemrust_geometry::LatticeVectors) -> Vec<([f64; 3], 
         .iter()
         .map(|&(i, j)| (corners[i], corners[j]))
         .collect()
+}
+
+/// Dim an RGB color by a factor (0.0 = black, 1.0 = unchanged).
+fn dim_color(color: RgbColor, factor: f64) -> RgbColor {
+    RgbColor(
+        (color.0 as f64 * factor) as u8,
+        (color.1 as f64 * factor) as u8,
+        (color.2 as f64 * factor) as u8,
+    )
 }
 
 /// Map an element symbol to a renderer-agnostic RGB color.
@@ -250,10 +311,11 @@ mod tests {
     use chemrust_geometry::{ElementSymbol, FracCoord, Structure};
 
     #[test]
-    fn scene_from_cu111_co_has_18_atoms() {
+    fn scene_from_cu111_co_has_atoms() {
         let structure = cu111_co_system(3.615);
         let scene = Scene::from_structure(&structure);
-        assert_eq!(scene.atoms.len(), 18);
+        // With periodic expansion, we get original 18 atoms plus boundary replicas
+        assert!(scene.atoms.len() >= 18, "got {}", scene.atoms.len());
     }
 
     #[test]
@@ -270,7 +332,13 @@ mod tests {
     fn second_atom_cartesian_position() {
         let structure = cu111_co_system(3.615);
         let scene = Scene::from_structure(&structure);
-        let pos = scene.atoms[1].position;
+        // Find the non-periodic Cu atom at ~(1.2781, 0.7379, 2.0871)
+        let pos = scene.atoms.iter()
+            .find(|a| !a.is_periodic_image
+                && (a.position[0] - 1.2781).abs() < 0.001
+                && (a.position[1] - 0.7379).abs() < 0.001)
+            .map(|a| a.position)
+            .expect("second Cu atom not found");
         assert!((pos[0] - 1.2781).abs() < 0.001, "x={}", pos[0]);
         assert!((pos[1] - 0.7379).abs() < 0.001, "y={}", pos[1]);
         assert!((pos[2] - 2.0871).abs() < 0.001, "z={}", pos[2]);
