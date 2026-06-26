@@ -65,20 +65,25 @@ pub fn handle_key_event(key: KeyEvent, camera: &mut Camera) -> Action {
         // Reset camera
         (KeyModifiers::NONE, KeyCode::Char('r')) => Action::Reset,
 
-        // Pan: Shift+WASD
-        (KeyModifiers::SHIFT, KeyCode::Char('W')) => {
+        // Pan: Shift+WASD (also match uppercase char without SHIFT modifier —
+        // some terminals send just the uppercase letter)
+        (KeyModifiers::SHIFT, KeyCode::Char('W'))
+        | (KeyModifiers::NONE, KeyCode::Char('W')) => {
             camera.pan(0.0, 1.0);
             Action::Redraw
         }
-        (KeyModifiers::SHIFT, KeyCode::Char('S')) => {
+        (KeyModifiers::SHIFT, KeyCode::Char('S'))
+        | (KeyModifiers::NONE, KeyCode::Char('S')) => {
             camera.pan(0.0, -1.0);
             Action::Redraw
         }
-        (KeyModifiers::SHIFT, KeyCode::Char('A')) => {
+        (KeyModifiers::SHIFT, KeyCode::Char('A'))
+        | (KeyModifiers::NONE, KeyCode::Char('A')) => {
             camera.pan(-1.0, 0.0);
             Action::Redraw
         }
-        (KeyModifiers::SHIFT, KeyCode::Char('D')) => {
+        (KeyModifiers::SHIFT, KeyCode::Char('D'))
+        | (KeyModifiers::NONE, KeyCode::Char('D')) => {
             camera.pan(1.0, 0.0);
             Action::Redraw
         }
