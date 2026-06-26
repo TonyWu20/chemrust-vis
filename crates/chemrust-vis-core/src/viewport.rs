@@ -65,8 +65,8 @@ impl Viewport {
         // Focal length: controls field of view. Larger = more zoomed in.
         // Set so the structure fills ~2/3 of the viewport for a typical slab.
         let focal = self.height * 0.6;
-        // Visual atom radius in Angstroms (larger than covalent for visibility).
-        let base_radius = 2.5;
+        // Visual atom radius in Angstroms (much larger than covalent for clarity).
+        let base_radius = 4.0;
 
         // Project atoms.
         let mut point_data: Vec<(DrawPoint, f64)> = scene

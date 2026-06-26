@@ -72,7 +72,13 @@ impl App {
     }
 
     /// Draw a single frame.
-    fn draw(&self, f: &mut ratatui::Frame) {
+    fn draw(&mut self, f: &mut ratatui::Frame) {
+        // Sync viewport size to terminal area before rendering
+        let area = f.area();
+        self.viewport = Viewport::new(
+            area.width as f64 * 2.0,
+            area.height as f64 * 4.0,
+        );
         let draw_cmds = self.viewport.render(&self.scene, &self.camera);
 
         let layout = Layout::default()
