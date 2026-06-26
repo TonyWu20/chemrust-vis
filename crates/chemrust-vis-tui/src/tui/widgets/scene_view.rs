@@ -72,6 +72,18 @@ impl BrailleGrid {
         }
     }
 
+    /// Draw a filled circle on the grid.
+    fn fill_circle(&mut self, cx: f64, cy: f64, radius: f64, color: Color) {
+        let r = radius.ceil() as i64;
+        for dy in -r..=r {
+            for dx in -r..=r {
+                if (dx as f64).powi(2) + (dy as f64).powi(2) <= radius.powi(2) {
+                    self.set_dot(cx + dx as f64, cy + dy as f64, color);
+                }
+            }
+        }
+    }
+
     /// Draw a line segment on the grid using Bresenham's algorithm.
     fn draw_line(&mut self, x1: f64, y1: f64, x2: f64, y2: f64, color: Color) {
         let (mut x, mut y) = (x1 as i64, y1 as i64);
@@ -163,12 +175,14 @@ impl<'a> Widget for SceneWidget<'a> {
             grid.draw_line(lx1, ly1, lx2, ly2, Color::Gray);
         }
 
-        // Draw atoms (depth-sorted: farthest first, closest last drawn on top)
+        // Draw atoms as filled circles (depth-sorted: farthest first, closest on top).
+        // Radius is perspective-dependent: closer atoms appear larger.
         for pt in &self.draw_commands.points {
             let cx = (pt.x - min_x) * fit_scale + offset_x;
             let cy = (pt.y - min_y) * fit_scale + offset_y;
             let color = rgb_to_ratatui(pt.color);
-            grid.set_dot(cx, cy, color);
+            let radius = (pt.radius * fit_scale).max(0.5); // at least half a dot
+            grid.fill_circle(cx, cy, radius, color);
         }
 
         // Render grid to buffer

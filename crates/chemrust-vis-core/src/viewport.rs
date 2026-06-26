@@ -18,6 +18,9 @@ pub struct DrawPoint {
     pub y: f64,
     /// View-space Z for depth verification.
     pub z_view: f64,
+    /// On-screen radius in dot units (perspective-dependent).
+    /// Larger radius = closer to camera. Typically 1–8 dots.
+    pub radius: f64,
     /// Renderer-agnostic color from the scene's element color map.
     pub color: crate::scene::RgbColor,
     /// Index into the scene's atoms array (and original Structure).
@@ -56,38 +59,41 @@ impl Viewport {
 
     /// Render a scene through a camera into draw commands.
     ///
-    /// Projects all atoms to canvas coordinates via the camera's
-    /// orthographic projection, depth-sorts them (farthest first =
-    /// painter's algorithm), and projects cell edges as line segments.
+    /// Uses perspective projection: atoms farther from camera appear smaller.
+    /// Depth-sorts via painter's algorithm (farthest first).
     pub fn render(&self, scene: &Scene, camera: &Camera) -> DrawCommands {
-        let scale = self.compute_scale(camera);
+        // FOV scale: proportional to viewport height for a natural look.
+        // Larger fov_scale = wider field of view (like a short focal length).
+        let fov_scale = self.height * 0.8;
+        // Base atomic radius in Angstroms (roughly a covalent bond radius).
+        let base_radius = 1.2;
 
-        // Project atoms to NDC, then to canvas, recording view-Z for depth sort.
+        // Project atoms with perspective.
         let mut point_data: Vec<(DrawPoint, f64)> = scene
             .atoms
             .iter()
             .map(|atom| {
                 let world = Point3::new(atom.position[0], atom.position[1], atom.position[2]);
-                let ndc = camera.project(&world, scale);
-                let z_view = ndc.z; // view-space Z after projection
+                let (ndc, persp) = camera.project_perspective(&world, fov_scale);
                 let dp = DrawPoint {
                     x: self.ndc_to_canvas_x(ndc.x),
                     y: self.ndc_to_canvas_y(ndc.y),
-                    z_view,
+                    z_view: ndc.z,
+                    radius: base_radius * persp,
                     color: atom.color,
                     atom_index: atom.atom_index,
                 };
-                (dp, z_view)
+                (dp, ndc.z)
             })
             .collect();
 
         // Sort by view-Z ascending (most negative = farthest from camera = first).
-        // Painter's algorithm: draw farthest first, closest last.
         point_data.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
         let points: Vec<DrawPoint> = point_data.into_iter().map(|(dp, _)| dp).collect();
 
-        // Project cell edges to canvas lines.
+        // Project cell edges — use orthographic for clean lines (perspective can distort).
+        let scale = self.height / (2.0 * camera.radius());
         let lines: Vec<DrawLine> = scene
             .cell_edges
             .iter()
@@ -110,18 +116,6 @@ impl Viewport {
             .collect();
 
         DrawCommands { points, lines }
-    }
-
-    /// Compute the orthographic scale factor based on camera radius and viewport size.
-    /// Makes the effective world extent approximately equal to `camera.radius()`.
-    fn compute_scale(&self, camera: &Camera) -> f64 {
-        // Use height as the reference dimension for orthographic scale.
-        // NDC range [-1, 1] maps to full height, so scale = height / 2.
-        // But we also want the zoom to be controlled by camera radius.
-        // Effective orthographic extent = scale, and we want the extent
-        // proportional to camera radius. Using height / (2 * radius) means
-        // that radius world-units maps to height/2 canvas units → NDC ±1.
-        self.height / (2.0 * camera.radius())
     }
 
     /// Convert NDC x (-1..1, left to right) to canvas x (0..width).

@@ -94,6 +94,24 @@ impl Camera {
         Point3::new(view_pt.x / scale, view_pt.y / scale, view_pt.z / scale)
     }
 
+    /// Perspective projection: returns (NDC position, perspective scale factor).
+    ///
+    /// The perspective scale factor can be used to compute on-screen atom radius:
+    /// `screen_radius = base_radius * persp_scale`.
+    ///
+    /// `fov_scale` controls the field of view (larger = wider FOV, like focal length).
+    pub fn project_perspective(
+        &self,
+        world_pt: &Point3<f64>,
+        fov_scale: f64,
+    ) -> (Point3<f64>, f64) {
+        let view_pt = self.view_matrix() * world_pt;
+        let depth = (-view_pt.z).max(0.01); // prevent division by zero / behind camera
+        let persp = fov_scale / depth;
+        let ndc = Point3::new(view_pt.x * persp, view_pt.y * persp, view_pt.z);
+        (ndc, persp)
+    }
+
     /// Get the current target.
     pub fn target(&self) -> Point3<f64> {
         self.target
