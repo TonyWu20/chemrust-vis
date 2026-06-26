@@ -64,8 +64,9 @@ impl Viewport {
         // Scale: world units → canvas dot units.
         // A world offset of `camera.radius()` maps to half the viewport.
         let scale = self.height / (2.0 * camera.radius());
-        // All atoms rendered at the same visual radius (in Angstroms → dots).
-        let atom_radius = scale * 0.7;
+        // Atom radius as a percentage of the viewport (3% of shorter dimension).
+        // Independent of camera zoom — atoms stay the same size on screen.
+        let atom_radius = (self.width.min(self.height) * 0.03).max(1.5);
 
         // Project atoms with orthographic projection.
         let mut point_data: Vec<(DrawPoint, f64)> = scene
