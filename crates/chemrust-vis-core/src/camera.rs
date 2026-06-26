@@ -98,6 +98,16 @@ impl Camera {
         self.radius
     }
 
+    /// Get the azimuthal angle theta (radians).
+    pub fn theta(&self) -> f64 {
+        self.theta
+    }
+
+    /// Get the polar angle phi (radians).
+    pub fn phi(&self) -> f64 {
+        self.phi
+    }
+
     /// Orbit the camera by delta angles.
     pub fn orbit(&mut self, d_theta: f64, d_phi: f64) {
         self.theta += d_theta;

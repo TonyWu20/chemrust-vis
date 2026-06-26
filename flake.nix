@@ -29,7 +29,7 @@
                 version = final.lib.removePrefix "v" claude-code-rev;
                 src = final.fetchurl {
                   url = "${baseUrl}/${version}/${platformKey}/claude";
-                  sha256 = "";
+                  sha256 = "sha256-91E6MDha2QGcI3Im/W7EZQizBi6+/Kiu2+OX0RGoGP8=";
                 };
               });
         };
@@ -72,6 +72,7 @@
               gcc
             ] ++ lib.optionals stdenv.isDarwin ([
               pkgs.apple-sdk_26
+              pkgs.libiconv
             ]);
             env = [{
               name = "LD_LIBRARY_PATH";

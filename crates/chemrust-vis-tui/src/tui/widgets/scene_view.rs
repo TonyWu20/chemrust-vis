@@ -1,0 +1,225 @@
+//! Scene view widget: renders `DrawCommands` as a grid of Braille-encoded
+//! characters, with element-specific colors for atoms and line segments for
+//! cell edges.
+
+use chemrust_vis_core::viewport::DrawCommands;
+#[allow(unused_imports)]
+use chemrust_vis_core::scene::RgbColor;
+use ratatui::{
+    buffer::Buffer,
+    layout::Rect,
+    style::{Color, Style},
+    widgets::Widget,
+};
+
+/// Convert canvas dot coordinates to Braille character grid position and bit index.
+///
+/// Each Braille character (U+2800–U+28FF) represents a 2×4 dot grid:
+/// - Dots 1-3 (bits 0-2): left column, top-to-bottom
+/// - Dots 4-6 (bits 3-5): right column, top-to-bottom
+/// - Dots 7-8 (bits 6-7): bottom row left, bottom row right
+///
+/// Returns `(char_col, char_row, dot_index)` where dot_index is the bit position
+/// within the Braille code point.
+pub fn canvas_to_braille(canvas_x: f64, canvas_y: f64) -> (usize, usize, u32) {
+    let char_col = (canvas_x / 2.0).floor() as usize;
+    let char_row = (canvas_y / 4.0).floor() as usize;
+    let dot_index = ((canvas_x as usize) % 2) * 3 + ((canvas_y as usize) % 4);
+    (char_col, char_row, dot_index as u32)
+}
+
+/// Convert an RgbColor to a ratatui Color.
+pub fn rgb_to_ratatui(color: RgbColor) -> Color {
+    Color::Rgb(color.0, color.1, color.2)
+}
+
+/// A grid of Braille characters with per-cell colors.
+struct BrailleGrid {
+    /// Unicode Braille code points for each character cell.
+    chars: Vec<Vec<u32>>,
+    /// Foreground color for each cell (first atom color that hits it).
+    colors: Vec<Vec<Option<Color>>>,
+    cols: usize,
+    rows: usize,
+}
+
+impl BrailleGrid {
+    fn new(cols: usize, rows: usize) -> Self {
+        BrailleGrid {
+            chars: vec![vec![0x2800u32; cols]; rows],
+            colors: vec![vec![None; cols]; rows],
+            cols,
+            rows,
+        }
+    }
+
+    /// Set a dot at canvas coordinates with the given color.
+    fn set_dot(&mut self, canvas_x: f64, canvas_y: f64, color: Color) {
+        let (col, row, dot) = canvas_to_braille(canvas_x, canvas_y);
+        if col < self.cols && row < self.rows {
+            self.chars[row][col] |= 1 << dot;
+            if self.colors[row][col].is_none() {
+                self.colors[row][col] = Some(color);
+            }
+        }
+    }
+
+    /// Draw a line segment on the grid using Bresenham's algorithm.
+    fn draw_line(&mut self, x1: f64, y1: f64, x2: f64, y2: f64, color: Color) {
+        let (mut x, mut y) = (x1 as i64, y1 as i64);
+        let (x2i, y2i) = (x2 as i64, y2 as i64);
+        let dx = (x2i - x).abs();
+        let dy = -(y2i - y).abs();
+        let sx = if x < x2i { 1 } else { -1 };
+        let sy = if y < y2i { 1 } else { -1 };
+        let mut err = dx + dy;
+
+        loop {
+            self.set_dot(x as f64, y as f64, color);
+            if x == x2i && y == y2i {
+                break;
+            }
+            let e2 = 2 * err;
+            if e2 >= dy {
+                if x == x2i { break; }
+                err += dy;
+                x += sx;
+            }
+            if e2 <= dx {
+                if y == y2i { break; }
+                err += dx;
+                y += sy;
+            }
+        }
+    }
+}
+
+/// Widget that renders a scene view from DrawCommands.
+pub struct SceneWidget<'a> {
+    draw_commands: &'a DrawCommands,
+}
+
+impl<'a> SceneWidget<'a> {
+    pub fn new(draw_commands: &'a DrawCommands) -> Self {
+        SceneWidget { draw_commands }
+    }
+}
+
+impl<'a> Widget for SceneWidget<'a> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let char_cols = area.width as usize;
+        let char_rows = area.height as usize;
+        if char_cols == 0 || char_rows == 0 {
+            return;
+        }
+
+        let dot_width = char_cols as f64 * 2.0;
+        let dot_height = char_rows as f64 * 4.0;
+
+        // Find bounding box of all draw commands
+        let mut min_x = f64::INFINITY;
+        let mut max_x = f64::NEG_INFINITY;
+        let mut min_y = f64::INFINITY;
+        let mut max_y = f64::NEG_INFINITY;
+        for pt in &self.draw_commands.points {
+            min_x = min_x.min(pt.x);
+            max_x = max_x.max(pt.x);
+            min_y = min_y.min(pt.y);
+            max_y = max_y.max(pt.y);
+        }
+        for line in &self.draw_commands.lines {
+            min_x = min_x.min(line.x1).min(line.x2);
+            max_x = max_x.max(line.x1).max(line.x2);
+            min_y = min_y.min(line.y1).min(line.y2);
+            max_y = max_y.max(line.y1).max(line.y2);
+        }
+        if !min_x.is_finite() {
+            return;
+        }
+        let data_width = (max_x - min_x + 1.0).max(1.0);
+        let data_height = (max_y - min_y + 1.0).max(1.0);
+
+        // Scale to fit, preserving aspect ratio
+        let fit_scale = (dot_width / data_width).min(dot_height / data_height);
+        let offset_x = (dot_width - data_width * fit_scale) / 2.0;
+        let offset_y = (dot_height - data_height * fit_scale) / 2.0;
+
+        let mut grid = BrailleGrid::new(char_cols, char_rows);
+
+        // Draw cell edges first (behind atoms)
+        for line in &self.draw_commands.lines {
+            let lx1 = (line.x1 - min_x) * fit_scale + offset_x;
+            let ly1 = (line.y1 - min_y) * fit_scale + offset_y;
+            let lx2 = (line.x2 - min_x) * fit_scale + offset_x;
+            let ly2 = (line.y2 - min_y) * fit_scale + offset_y;
+            grid.draw_line(lx1, ly1, lx2, ly2, Color::Gray);
+        }
+
+        // Draw atoms (depth-sorted: farthest first, closest last drawn on top)
+        for pt in &self.draw_commands.points {
+            let cx = (pt.x - min_x) * fit_scale + offset_x;
+            let cy = (pt.y - min_y) * fit_scale + offset_y;
+            grid.set_dot(cx, cy, Color::White);
+        }
+
+        // Render grid to buffer
+        for row in 0..char_rows.min(grid.rows) {
+            for col in 0..char_cols.min(grid.cols) {
+                let ch = char::from_u32(grid.chars[row][col]).unwrap_or(' ');
+                let style = if let Some(color) = grid.colors[row][col] {
+                    Style::default().fg(color)
+                } else {
+                    Style::default()
+                };
+                let x = area.x + col as u16;
+                let y = area.y + row as u16;
+                if let Some(cell) = buf.cell_mut((x, y)) {
+                    cell.set_char(ch).set_style(style);
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn braille_dot_0_0() {
+        let (col, row, dot) = canvas_to_braille(0.0, 0.0);
+        assert_eq!(col, 0);
+        assert_eq!(row, 0);
+        assert_eq!(dot, 0);
+        assert_eq!(0x2800 | (1 << dot), 0x2801);
+    }
+
+    #[test]
+    fn braille_dot_1_0_right_column_top() {
+        let (col, row, dot) = canvas_to_braille(1.0, 0.0);
+        assert_eq!(col, 0);
+        assert_eq!(row, 0);
+        assert_eq!(dot, 3); // right column, top
+        assert_eq!(0x2800 | (1 << dot), 0x2808);
+    }
+
+    #[test]
+    fn braille_two_dots_same_cell() {
+        let (c1, r1, d1) = canvas_to_braille(0.0, 0.0);
+        let (c2, r2, d2) = canvas_to_braille(1.0, 2.0);
+        assert_eq!(c1, c2);
+        assert_eq!(r1, r2);
+        let combined = 0x2800u32 | (1 << d1) | (1 << d2);
+        assert_eq!(combined, 0x2801 | 0x20); // bits 0 and 5
+    }
+
+    #[test]
+    fn braille_subpixel_flooring() {
+        let (col, row, dot) = canvas_to_braille(3.7, 8.2);
+        assert_eq!(col, 1); // floor(3.7/2) = 1
+        assert_eq!(row, 2); // floor(8.2/4) = 2
+        // x%2 = 3%2 = 1, y%4 = 8%4 = 0
+        // dot = 1*3 + 0 = 3
+        assert_eq!(dot, 3);
+    }
+}
