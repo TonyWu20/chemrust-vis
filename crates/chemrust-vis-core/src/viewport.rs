@@ -58,32 +58,73 @@ impl Viewport {
 
     /// Render a scene through a camera into draw commands.
     ///
-    /// Uses orthographic projection: all atoms have the same rendered size
-    /// regardless of depth. The camera's look-at point maps to viewport center.
+    /// Orthographic projection: projects atoms to view space, finds the 2D
+    /// bounding box, scales to fit the viewport, and centers the camera's
+    /// look-at point (which maps to view-space origin).
     pub fn render(&self, scene: &Scene, camera: &Camera) -> DrawCommands {
-        // Scale: world units → canvas dot units.
-        // A world offset of `camera.radius()` maps to half the viewport.
-        let scale = self.height / (2.0 * camera.radius());
-        // Atom radius as a percentage of the viewport (5% of shorter dimension).
-        // Independent of camera zoom — atoms stay the same size on screen.
-        let atom_radius = (self.width.min(self.height) * 0.05).max(2.0);
-
-        // Project atoms with orthographic projection.
-        let mut point_data: Vec<(DrawPoint, f64)> = scene
+        // Step 1: project all world points to view space
+        let view_matrix = camera.view_matrix();
+        let view_pts: Vec<(Point3<f64>, &crate::scene::AtomDrawData)> = scene
             .atoms
             .iter()
             .map(|atom| {
                 let world = Point3::new(atom.position[0], atom.position[1], atom.position[2]);
-                let ndc = camera.project(&world, scale);
+                (view_matrix * world, atom)
+            })
+            .collect();
+
+        // Step 2: find 2D extent in view space (x,y), ignoring z
+        let mut min_x = f64::INFINITY;
+        let mut max_x = f64::NEG_INFINITY;
+        let mut min_y = f64::INFINITY;
+        let mut max_y = f64::NEG_INFINITY;
+        for (vp, _) in &view_pts {
+            min_x = min_x.min(vp.x);
+            max_x = max_x.max(vp.x);
+            min_y = min_y.min(vp.y);
+            max_y = max_y.max(vp.y);
+        }
+        // Also include cell edge endpoints
+        for &(start, end) in &scene.cell_edges {
+            let s = view_matrix * Point3::new(start[0], start[1], start[2]);
+            let e = view_matrix * Point3::new(end[0], end[1], end[2]);
+            min_x = min_x.min(s.x).min(e.x);
+            max_x = max_x.max(s.x).max(e.x);
+            min_y = min_y.min(s.y).min(e.y);
+            max_y = max_y.max(s.y).max(e.y);
+        }
+        if !min_x.is_finite() {
+            return DrawCommands { points: vec![], lines: vec![] };
+        }
+
+        let data_w = (max_x - min_x).max(1.0);
+        let data_h = (max_y - min_y).max(1.0);
+        // Scale to fill 80% of viewport, preserving aspect ratio
+        let margin = 0.85;
+        let scale = (self.width * margin / data_w).min(self.height * margin / data_h);
+        // Center offset in canvas dot units
+        let cx = self.width / 2.0;
+        let cy = self.height / 2.0;
+        let data_cx = (min_x + max_x) / 2.0;
+        let data_cy = (min_y + max_y) / 2.0;
+        // Atom radius: 5% of viewport shorter dimension, scaled to world units
+        let atom_radius = (self.width.min(self.height) * 0.05 / scale).max(0.5);
+
+        // Step 3: map to canvas with centering and scaling
+        let mut point_data: Vec<(DrawPoint, f64)> = view_pts
+            .iter()
+            .map(|(vp, atom)| {
+                let sx = (vp.x - data_cx) * scale + cx;
+                let sy = -(vp.y - data_cy) * scale + cy; // flip Y: view +Y = up, canvas +Y = down
                 let dp = DrawPoint {
-                    x: (ndc.x + 1.0) / 2.0 * self.width,
-                    y: (1.0 - ndc.y) / 2.0 * self.height,
-                    z_view: ndc.z,
-                    radius: atom_radius.max(1.5),
+                    x: sx,
+                    y: sy,
+                    z_view: vp.z,
+                    radius: atom_radius * scale,
                     color: atom.color,
                     atom_index: atom.atom_index,
                 };
-                (dp, ndc.z)
+                (dp, vp.z)
             })
             .collect();
 
@@ -91,24 +132,18 @@ impl Viewport {
         point_data.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
         let points: Vec<DrawPoint> = point_data.into_iter().map(|(dp, _)| dp).collect();
 
-        // Project cell edges.
+        // Step 4: project cell edges
         let lines: Vec<DrawLine> = scene
             .cell_edges
             .iter()
             .map(|&(start, end)| {
-                let s_ndc = camera.project(
-                    &Point3::new(start[0], start[1], start[2]),
-                    scale,
-                );
-                let e_ndc = camera.project(
-                    &Point3::new(end[0], end[1], end[2]),
-                    scale,
-                );
+                let s = view_matrix * Point3::new(start[0], start[1], start[2]);
+                let e = view_matrix * Point3::new(end[0], end[1], end[2]);
                 DrawLine {
-                    x1: (s_ndc.x + 1.0) / 2.0 * self.width,
-                    y1: (1.0 - s_ndc.y) / 2.0 * self.height,
-                    x2: (e_ndc.x + 1.0) / 2.0 * self.width,
-                    y2: (1.0 - e_ndc.y) / 2.0 * self.height,
+                    x1: (s.x - data_cx) * scale + cx,
+                    y1: -(s.y - data_cy) * scale + cy,
+                    x2: (e.x - data_cx) * scale + cx,
+                    y2: -(e.y - data_cy) * scale + cy,
                 }
             })
             .collect();
