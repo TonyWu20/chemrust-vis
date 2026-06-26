@@ -92,19 +92,19 @@ impl Viewport {
 
         let points: Vec<DrawPoint> = point_data.into_iter().map(|(dp, _)| dp).collect();
 
-        // Project cell edges — use orthographic for clean lines (perspective can distort).
-        let scale = self.height / (2.0 * camera.radius());
+        // Project cell edges with the SAME perspective projection as atoms,
+        // so the cell box aligns with atom positions.
         let lines: Vec<DrawLine> = scene
             .cell_edges
             .iter()
             .map(|&(start, end)| {
-                let s_ndc = camera.project(
+                let (s_ndc, _) = camera.project_perspective(
                     &Point3::new(start[0], start[1], start[2]),
-                    scale,
+                    fov_scale,
                 );
-                let e_ndc = camera.project(
+                let (e_ndc, _) = camera.project_perspective(
                     &Point3::new(end[0], end[1], end[2]),
-                    scale,
+                    fov_scale,
                 );
                 DrawLine {
                     x1: self.ndc_to_canvas_x(s_ndc.x),

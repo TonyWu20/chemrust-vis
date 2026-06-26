@@ -33,8 +33,25 @@ fn main() -> Result<()> {
     let structure = CellLoader::load(&cli.file)
         .with_context(|| format!("Failed to load cell file: {}", cli.file.display()))?;
 
-    // Build the scene.
+    // Print structure summary for verification.
+    eprintln!("Loaded: {} atoms", structure.num_atoms());
+    if let Some(cell) = &structure.cell {
+        let (a, b, c) = cell.lengths();
+        eprintln!("  Cell: a={:.4}  b={:.4}  c={:.4} Å", a, b, c);
+        let t = cell.tensor();
+        eprintln!("  a = ({:.4}, {:.4}, {:.4})", t[(0,0)], t[(1,0)], t[(2,0)]);
+        eprintln!("  b = ({:.4}, {:.4}, {:.4})", t[(0,1)], t[(1,1)], t[(2,1)]);
+        eprintln!("  c = ({:.4}, {:.4}, {:.4})", t[(0,2)], t[(1,2)], t[(2,2)]);
+    }
+    // Print first 3 atom positions in Cartesian
     let scene = Scene::from_structure(&structure);
+    for (i, atom) in scene.atoms.iter().take(3).enumerate() {
+        let el = format!("{:?}", atom.element);
+        eprintln!(
+            "  atom[{}] {} at ({:.4}, {:.4}, {:.4})",
+            i, el, atom.position[0], atom.position[1], atom.position[2]
+        );
+    }
 
     // Terminal setup.
     enable_raw_mode().context("Failed to enable raw mode")?;
