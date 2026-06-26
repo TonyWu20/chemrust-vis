@@ -2,6 +2,7 @@
 
 use std::io;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use chemrust_vis_core::camera::Camera;
 use chemrust_vis_core::scene::Scene;
@@ -13,6 +14,7 @@ use ratatui::{
 };
 
 use super::input::{self, Action};
+use super::mcp_server::SharedState;
 use super::widgets::scene_view::SceneWidget;
 use super::widgets::status_bar::StatusBar;
 
@@ -29,6 +31,8 @@ pub struct App {
     /// Count of non-periodic atoms for display.
     num_atoms: usize,
     running: bool,
+    /// Shared state for the background MCP server.
+    mcp_state: Option<Arc<Mutex<SharedState>>>,
 }
 
 impl App {
@@ -57,7 +61,13 @@ impl App {
             file_path,
             num_atoms,
             running: true,
+            mcp_state: None,
         }
+    }
+
+    /// Attach a shared state for the MCP server to read camera/viewport.
+    pub fn set_mcp_state(&mut self, state: Arc<Mutex<SharedState>>) {
+        self.mcp_state = Some(state);
     }
 
     /// Run the main event loop.
@@ -97,6 +107,16 @@ impl App {
         let area = f.area();
         // Block rendering: 2 dots per column, 2 dots per row
         self.viewport = Viewport::new(area.width as f64 * 2.0, area.height as f64 * 2.0);
+
+        // Sync camera state to MCP server
+        if let Some(ref mcp) = self.mcp_state {
+            if let Ok(mut s) = mcp.lock() {
+                s.theta = self.camera.theta();
+                s.phi = self.camera.phi();
+                s.radius = self.camera.radius();
+            }
+        }
+
         let draw_cmds = self.viewport.render(&self.scene, &self.camera);
 
         let layout = Layout::default()

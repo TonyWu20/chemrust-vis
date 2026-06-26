@@ -28,6 +28,10 @@ struct Cli {
     /// Run in MCP (Model Context Protocol) server mode instead of TUI.
     #[arg(long)]
     mcp: bool,
+
+    /// Start a background MCP TCP server on this port alongside the TUI.
+    #[arg(long, default_value_t = 0)]
+    mcp_port: u16,
 }
 
 fn main() -> Result<()> {
@@ -64,20 +68,40 @@ fn main() -> Result<()> {
         );
     }
 
+    // Set up background MCP server if port specified (before scene moves into App)
+    let mcp_state: Option<std::sync::Arc<std::sync::Mutex<tui::mcp_server::SharedState>>> =
+        if cli.mcp_port > 0 {
+            let center = scene.center_for_view();
+            let s = std::sync::Arc::new(std::sync::Mutex::new(tui::mcp_server::SharedState {
+                scene: Scene::from_structure(&structure),
+                theta: std::f64::consts::FRAC_PI_6,
+                phi: std::f64::consts::FRAC_PI_6,
+                radius: 20.0,
+                target: center,
+                vp_width: 160.0,
+                vp_height: 96.0,
+            }));
+            tui::mcp_server::start_mcp_server(cli.mcp_port, s.clone());
+            Some(s)
+        } else {
+            None
+        };
+
     // Terminal setup.
     enable_raw_mode().context("Failed to enable raw mode")?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)
         .context("Failed to enter alternate screen")?;
-    // Mouse capture for future Phase 2.
     let _ = execute!(stdout, crossterm::event::EnableMouseCapture);
 
-    // Create terminal backend and app.
     let backend = CrosstermBackend::new(stdout);
     let mut terminal =
         ratatui::Terminal::new(backend).context("Failed to create terminal")?;
 
     let mut app = App::new(scene, cli.file);
+    if let Some(ref state) = mcp_state {
+        app.set_mcp_state(state.clone());
+    }
 
     let result = app.run(&mut terminal);
 

@@ -37,8 +37,13 @@ impl Camera {
 
     /// Create a camera with explicit angles.
     pub fn with_angles(target: Point3<f64>, radius: f64, theta: f64, phi: f64) -> Self {
+        Camera { target, radius, theta, phi }
+    }
+
+    /// Create a camera with explicit angles, target as [x, y, z].
+    pub fn with_angles_target(target: [f64; 3], radius: f64, theta: f64, phi: f64) -> Self {
         Camera {
-            target,
+            target: Point3::new(target[0], target[1], target[2]),
             radius,
             theta,
             phi,
