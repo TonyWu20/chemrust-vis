@@ -74,10 +74,12 @@
               pkgs.apple-sdk_26
               pkgs.libiconv
             ]);
-            env = [{
-              name = "LD_LIBRARY_PATH";
-              value = "-F${pkgs.apple-sdk_26}/Library/Frameworks -L${pkgs.libcxx}/lib";
-            }];
+            env = [
+              {
+                name = "NIX_LDFLAGS";
+                value = "-L${pkgs.libiconv}/lib";
+              }
+            ];
             commands = [
               {
                 name = "claude-qwen3.6-nix";
