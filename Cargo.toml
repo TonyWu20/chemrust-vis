@@ -1,0 +1,16 @@
+[workspace]
+members = [
+    "crates/chemrust-vis-core",
+    "crates/chemrust-vis-tui",
+]
+resolver = "2"
+
+[workspace.package]
+description = "Terminal-first 3D chemical structure visualizer"
+authors = ["TonyWu20"]
+readme = "README.md"
+repository = "https://github.com/TonyWu20/chemrust-vis"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+keywords = ["chemistry", "visualization", "tui", "crystal-structure"]

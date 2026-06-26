@@ -1,0 +1,19 @@
+[package]
+name = "chemrust-vis-tui"
+description = "TUI binary for chemrust-vis: terminal 3D chemical structure viewer"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "chemrust-vis-tui"
+path = "src/main.rs"
+
+[dependencies]
+chemrust-vis-core = { path = "../chemrust-vis-core", features = ["castep-loader"] }
+ratatui = "0.29"
+crossterm = "0.28"
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
