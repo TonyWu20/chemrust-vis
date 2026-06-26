@@ -124,14 +124,15 @@ impl App {
     }
 }
 
-/// Compute the axis-aligned bounding box corners of the scene.
+/// Compute the axis-aligned bounding box of original (non-periodic) atoms.
 fn bounding_box_corners(scene: &Scene) -> ([f64; 3], [f64; 3]) {
-    if scene.atoms.is_empty() {
+    let originals: Vec<_> = scene.atoms.iter().filter(|a| !a.is_periodic_image).collect();
+    if originals.is_empty() {
         return ([0.0; 3], [0.0; 3]);
     }
     let mut min = [f64::INFINITY; 3];
     let mut max = [f64::NEG_INFINITY; 3];
-    for atom in &scene.atoms {
+    for atom in originals {
         for i in 0..3 {
             min[i] = min[i].min(atom.position[i]);
             max[i] = max[i].max(atom.position[i]);

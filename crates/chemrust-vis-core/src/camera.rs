@@ -17,14 +17,15 @@ pub struct Camera {
 }
 
 impl Camera {
-    /// Create a new camera looking at target from default position
-    /// (theta=0, phi=π/4 = 45° elevation from XY plane toward +Z).
+    /// Create a new camera looking at target from a diagonal view.
+    /// theta=30° (from +X toward +Y), phi=30° elevation from XY plane.
+    /// This gives a natural 3/4 view that shows three faces of the unit cell.
     pub fn new(target: Point3<f64>, radius: f64) -> Self {
         Camera {
             target,
             radius,
-            theta: 0.0,
-            phi: std::f64::consts::FRAC_PI_4,
+            theta: std::f64::consts::FRAC_PI_6,  // 30° azimuth
+            phi: std::f64::consts::FRAC_PI_6,    // 30° elevation
         }
     }
 

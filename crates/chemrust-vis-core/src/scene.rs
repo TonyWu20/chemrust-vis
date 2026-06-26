@@ -150,21 +150,25 @@ impl Scene {
 
     /// Return the best center for camera framing.
     ///
-    /// For periodic structures: geometric cell center = (a+b+c)/2,
-    /// unaffected by periodic replicas. For molecules: atom centroid.
+    /// Uses the bounding box center of original (non-periodic) atoms only.
+    /// Periodic replicas are excluded so they don't skew the centroid.
     pub fn center_for_view(&self) -> [f64; 3] {
-        if self.cell_edges.is_empty() {
+        let originals: Vec<&AtomDrawData> = self
+            .atoms
+            .iter()
+            .filter(|a| !a.is_periodic_image)
+            .collect();
+        if originals.is_empty() {
             return self.bounding_box_center();
         }
-        // The first three edges from origin give the lattice vectors a, b, c.
-        // Edge[0] = origin→a, edge[1] = origin→b, edge[2] = origin→c.
-        let (_, a) = self.cell_edges[0];
-        let (_, b) = self.cell_edges[1];
-        let (_, c) = self.cell_edges[2];
-        let cx = (a[0] + b[0] + c[0]) / 2.0;
-        let cy = (a[1] + b[1] + c[1]) / 2.0;
-        let cz = (a[2] + b[2] + c[2]) / 2.0;
-        [cx, cy, cz]
+        let n = originals.len() as f64;
+        let mut sum = [0.0; 3];
+        for atom in originals {
+            sum[0] += atom.position[0];
+            sum[1] += atom.position[1];
+            sum[2] += atom.position[2];
+        }
+        [sum[0] / n, sum[1] / n, sum[2] / n]
     }
 }
 
