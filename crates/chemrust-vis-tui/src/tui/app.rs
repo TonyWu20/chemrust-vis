@@ -88,7 +88,7 @@ impl App {
                         Action::Reset => {
                             self.camera =
                                 Camera::from_target(self.initial_target, self.initial_radius);
-                            self.viewport.reset_pan();
+                            self.viewport.reset();
                         }
                         _ => {}
                     }
@@ -107,7 +107,10 @@ impl App {
     fn draw(&mut self, f: &mut ratatui::Frame) {
         let area = f.area();
         // Block rendering: 2 dots per column, 2 dots per row
-        self.viewport = Viewport::new(area.width as f64 * 2.0, area.height as f64 * 2.0);
+        // Update viewport dimensions without resetting pan/zoom
+        self.viewport.width = area.width as f64 * 2.0;
+        self.viewport.height = area.height as f64 * 2.0;
+        self.viewport.set_zoom_from_radius(self.camera.radius(), self.initial_radius);
 
         // Sync camera state to MCP server
         if let Some(ref mcp) = self.mcp_state {

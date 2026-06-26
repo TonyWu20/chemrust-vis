@@ -109,7 +109,10 @@ impl McpServer {
                                 "cols": {"type": "integer", "description": "Terminal columns (default 80)"},
                                 "rows": {"type": "integer", "description": "Terminal rows (default 24)"},
                                 "show_atoms": {"type": "boolean", "description": "Include atom spheres (default true)"},
-                                "show_cell": {"type": "boolean", "description": "Include cell edges (default true)"}
+                                "show_cell": {"type": "boolean", "description": "Include cell edges (default true)"},
+                        "pan_x": {"type": "number", "description": "Pan offset X in dot units (default 0)"},
+                        "pan_y": {"type": "number", "description": "Pan offset Y in dot units (default 0)"},
+                        "zoom": {"type": "number", "description": "Zoom factor: 1.0=default, >1=zoom in (default 1.0)"}
                             }
                         }
                     },
@@ -168,9 +171,15 @@ impl McpServer {
         let rows = args["rows"].as_u64().unwrap_or(24) as usize;
         let show_atoms = args["show_atoms"].as_bool().unwrap_or(true);
         let show_cell = args["show_cell"].as_bool().unwrap_or(true);
+        let pan_x = args["pan_x"].as_f64().unwrap_or(0.0);
+        let pan_y = args["pan_y"].as_f64().unwrap_or(0.0);
+        let zoom = args["zoom"].as_f64().unwrap_or(1.0);
 
         let camera = Camera::with_angles(Point3::new(tx, ty, tz), radius, theta, phi);
-        let viewport = Viewport::new(cols as f64 * 2.0, rows as f64 * 2.0);
+        let mut viewport = Viewport::new(cols as f64 * 2.0, rows as f64 * 2.0);
+        viewport.pan_x = pan_x;
+        viewport.pan_y = pan_y;
+        viewport.zoom = zoom;
         let mut cmds = viewport.render(&self.scene, &camera);
 
         if !show_atoms {

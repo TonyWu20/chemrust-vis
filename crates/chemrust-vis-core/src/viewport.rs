@@ -45,18 +45,20 @@ pub struct DrawCommands {
 /// The viewport: maps scene geometry to canvas coordinates.
 #[derive(Debug, Clone)]
 pub struct Viewport {
-    width: f64,
-    height: f64,
+    pub width: f64,
+    pub height: f64,
     /// Pan offset in canvas dot units (x, y).
     pub pan_x: f64,
     pub pan_y: f64,
+    /// Zoom factor: 1.0 = default, >1 = zoomed in, <1 = zoomed out.
+    pub zoom: f64,
 }
 
 impl Viewport {
     /// Create a new viewport with given canvas dimensions in dot units.
     /// Width = cols × 2, height = rows × 2 for block rendering.
     pub fn new(width: f64, height: f64) -> Self {
-        Viewport { width, height, pan_x: 0.0, pan_y: 0.0 }
+        Viewport { width, height, pan_x: 0.0, pan_y: 0.0, zoom: 1.0 }
     }
 
     /// Pan the view by an offset in canvas dot units.
@@ -65,10 +67,16 @@ impl Viewport {
         self.pan_y += dy;
     }
 
-    /// Reset pan to zero.
-    pub fn reset_pan(&mut self) {
+    /// Reset pan and zoom to defaults.
+    pub fn reset(&mut self) {
         self.pan_x = 0.0;
         self.pan_y = 0.0;
+        self.zoom = 1.0;
+    }
+
+    /// Set zoom from camera radius relative to initial framing radius.
+    pub fn set_zoom_from_radius(&mut self, radius: f64, initial_radius: f64) {
+        self.zoom = (initial_radius / radius).max(0.1).min(20.0);
     }
 
     /// Render a scene through a camera into draw commands.
@@ -114,12 +122,12 @@ impl Viewport {
 
         let data_w = (max_x - min_x).max(1.0);
         let data_h = (max_y - min_y).max(1.0);
-        // Scale to fill 85% of viewport, preserving aspect ratio
+        // Scale: fit data to 85% of viewport, then apply zoom factor.
+        // base_scale: data fills viewport → scale makes data extent fill margin.
         let margin = 0.85;
-        let scale = (self.width * margin / data_w).min(self.height * margin / data_h);
+        let base_scale = (self.width * margin / data_w).min(self.height * margin / data_h);
+        let scale = base_scale * self.zoom;
         // Center on data's view-space midpoint + pan offset.
-        // Camera target move (via Camera::pan) shifts view-space positions.
-        // Viewport::pan() adds an additional canvas-level offset.
         let data_cx = (min_x + max_x) / 2.0;
         let data_cy = (min_y + max_y) / 2.0;
         let cx = self.width / 2.0 + self.pan_x;
