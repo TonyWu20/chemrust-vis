@@ -76,8 +76,8 @@
             ]);
             env = [
               {
-                name = "NIX_LDFLAGS";
-                value = "-L${pkgs.libiconv}/lib";
+                name = "RUSTFLAGS";
+                value = "-C link-arg=-L${pkgs.libiconv}/lib";
               }
             ];
             commands = [

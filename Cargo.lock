@@ -185,8 +185,6 @@ dependencies = [
 [[package]]
 name = "castep-cell-fmt"
 version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f44cbe2dc62e617a632209df65118c73f8ba5a4166280fbc1440d3a78a110def"
 dependencies = [
  "anyhow",
  "ariadne",
@@ -196,9 +194,7 @@ dependencies = [
 
 [[package]]
 name = "castep-cell-io"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ea96aef154466d9b6d898e3faabebe6a2d4146b98f3eafb7075a327dcce5c35e"
+version = "0.6.0"
 dependencies = [
  "bon",
  "castep-cell-fmt",

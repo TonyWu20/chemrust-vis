@@ -15,16 +15,24 @@ use ratatui::{
 /// Convert canvas dot coordinates to Braille character grid position and bit index.
 ///
 /// Each Braille character (U+2800–U+28FF) represents a 2×4 dot grid:
-/// - Dots 1-3 (bits 0-2): left column, top-to-bottom
-/// - Dots 4-6 (bits 3-5): right column, top-to-bottom
-/// - Dots 7-8 (bits 6-7): bottom row left, bottom row right
+/// - Dots 1-3 (bits 0-2): left column, rows 0-2 (top-to-bottom)
+/// - Dots 4-6 (bits 3-5): right column, rows 0-2 (top-to-bottom)
+/// - Dots 7-8 (bits 6-7): bottom row (row 3), left then right
 ///
 /// Returns `(char_col, char_row, dot_index)` where dot_index is the bit position
 /// within the Braille code point.
 pub fn canvas_to_braille(canvas_x: f64, canvas_y: f64) -> (usize, usize, u32) {
     let char_col = (canvas_x / 2.0).floor() as usize;
     let char_row = (canvas_y / 4.0).floor() as usize;
-    let dot_index = ((canvas_x as usize) % 2) * 3 + ((canvas_y as usize) % 4);
+    let x_mod = (canvas_x as usize) % 2;
+    let y_mod = (canvas_y as usize) % 4;
+    // Rows 0-2 map to bits 0-2 (left) and 3-5 (right).
+    // Bottom row (y_mod=3) maps to bits 6 (left) and 7 (right).
+    let dot_index = if y_mod < 3 {
+        x_mod * 3 + y_mod
+    } else {
+        x_mod + 6
+    };
     (char_col, char_row, dot_index as u32)
 }
 
@@ -219,8 +227,22 @@ mod tests {
         let (col, row, dot) = canvas_to_braille(3.7, 8.2);
         assert_eq!(col, 1); // floor(3.7/2) = 1
         assert_eq!(row, 2); // floor(8.2/4) = 2
-        // x%2 = 3%2 = 1, y%4 = 8%4 = 0
-        // dot = 1*3 + 0 = 3
+        // x%2 = 1, y%4 = 0, dot = 1*3 + 0 = 3
         assert_eq!(dot, 3);
+    }
+
+    #[test]
+    fn braille_bottom_row_correct_bit() {
+        // Bottom row (y%4 == 3) maps to bits 6 (left) and 7 (right)
+        let (_, _, dot_left) = canvas_to_braille(0.0, 3.0);
+        assert_eq!(dot_left, 6); // left bottom → bit 6 (U+2840)
+        assert_eq!(0x2800 | (1 << dot_left), 0x2840);
+
+        let (_, _, dot_right) = canvas_to_braille(1.0, 3.0);
+        assert_eq!(dot_right, 7); // right bottom → bit 7 (U+2880)
+        assert_eq!(0x2800 | (1 << dot_right), 0x2880);
+
+        // (0,3) and (1,0) should NOT collide
+        assert_ne!(dot_left, 3); // should not collide with (1,0)
     }
 }
