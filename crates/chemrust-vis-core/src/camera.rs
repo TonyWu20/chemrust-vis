@@ -47,12 +47,17 @@ impl Camera {
     }
 
     /// Choose an up vector for look_at_rh, avoiding gimbal lock.
+    ///
+    /// When the view direction is nearly parallel to (0,0,1), the default
+    /// up vector would cause a degenerate cross product.
     fn compute_up(&self) -> Vector3<f64> {
-        let eps = 1e-6;
-        if self.phi < eps {
+        let pos = self.position();
+        let dir = (self.target - pos).normalize();
+        let z_axis = Vector3::new(0.0, 0.0, 1.0);
+        // If view direction is nearly parallel to ±Z, use -Y as up.
+        // |dir · z_axis| ≈ 1 means nearly parallel.
+        if dir.dot(&z_axis).abs() > 0.9999 {
             Vector3::new(0.0, -1.0, 0.0)
-        } else if (self.phi - std::f64::consts::PI).abs() < eps {
-            Vector3::new(0.0, 1.0, 0.0)
         } else {
             Vector3::new(0.0, 0.0, 1.0)
         }
