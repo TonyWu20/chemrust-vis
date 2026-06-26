@@ -58,37 +58,31 @@ impl Viewport {
 
     /// Render a scene through a camera into draw commands.
     ///
-    /// Uses perspective projection: world point → view space →
-    /// perspective divide → canvas dot coordinates. The camera's
-    /// look-at point maps to the viewport center.
+    /// Uses orthographic projection: all atoms have the same rendered size
+    /// regardless of depth. The camera's look-at point maps to viewport center.
     pub fn render(&self, scene: &Scene, camera: &Camera) -> DrawCommands {
-        // Focal length: controls field of view. Larger = more zoomed in.
-        // Set so the structure fills ~2/3 of the viewport for a typical slab.
-        let focal = self.height * 0.6;
-        // Visual atom radius in Angstroms (much larger than covalent for clarity).
-        let base_radius = 4.0;
+        // Scale: world units → canvas dot units.
+        // A world offset of `camera.radius()` maps to half the viewport.
+        let scale = self.height / (2.0 * camera.radius());
+        // All atoms rendered at the same visual radius (in Angstroms → dots).
+        let atom_radius = scale * 1.8;
 
-        // Project atoms.
+        // Project atoms with orthographic projection.
         let mut point_data: Vec<(DrawPoint, f64)> = scene
             .atoms
             .iter()
             .map(|atom| {
                 let world = Point3::new(atom.position[0], atom.position[1], atom.position[2]);
-                let (sx, sy, z_view, persp) = camera.project_to_screen(
-                    &world,
-                    focal,
-                    self.width,
-                    self.height,
-                );
+                let ndc = camera.project(&world, scale);
                 let dp = DrawPoint {
-                    x: sx,
-                    y: sy,
-                    z_view,
-                    radius: (base_radius * persp).max(1.0), // at least 1 dot
+                    x: (ndc.x + 1.0) / 2.0 * self.width,
+                    y: (1.0 - ndc.y) / 2.0 * self.height,
+                    z_view: ndc.z,
+                    radius: atom_radius.max(1.5),
                     color: atom.color,
                     atom_index: atom.atom_index,
                 };
-                (dp, z_view)
+                (dp, ndc.z)
             })
             .collect();
 
@@ -96,24 +90,25 @@ impl Viewport {
         point_data.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
         let points: Vec<DrawPoint> = point_data.into_iter().map(|(dp, _)| dp).collect();
 
-        // Project cell edges with same perspective.
+        // Project cell edges.
         let lines: Vec<DrawLine> = scene
             .cell_edges
             .iter()
             .map(|&(start, end)| {
-                let (sx1, sy1, _, _) = camera.project_to_screen(
+                let s_ndc = camera.project(
                     &Point3::new(start[0], start[1], start[2]),
-                    focal,
-                    self.width,
-                    self.height,
+                    scale,
                 );
-                let (sx2, sy2, _, _) = camera.project_to_screen(
+                let e_ndc = camera.project(
                     &Point3::new(end[0], end[1], end[2]),
-                    focal,
-                    self.width,
-                    self.height,
+                    scale,
                 );
-                DrawLine { x1: sx1, y1: sy1, x2: sx2, y2: sy2 }
+                DrawLine {
+                    x1: (s_ndc.x + 1.0) / 2.0 * self.width,
+                    y1: (1.0 - s_ndc.y) / 2.0 * self.height,
+                    x2: (e_ndc.x + 1.0) / 2.0 * self.width,
+                    y2: (1.0 - e_ndc.y) / 2.0 * self.height,
+                }
             })
             .collect();
 

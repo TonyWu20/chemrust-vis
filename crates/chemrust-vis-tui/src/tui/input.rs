@@ -23,21 +23,21 @@ pub fn handle_key_event(key: KeyEvent, camera: &mut Camera) -> Action {
         (KeyModifiers::NONE, KeyCode::Esc)
         | (KeyModifiers::NONE, KeyCode::Char('q')) => Action::Quit,
 
-        // Orbit: w/s = rotate around theta, a/d = rotate around phi
-        (KeyModifiers::NONE, KeyCode::Char('w')) => {
+        // Orbit: a/d = rotate around horizontally (theta), w/s = tilt up/down (phi)
+        (KeyModifiers::NONE, KeyCode::Char('a')) => {
             camera.orbit(-5.0_f64.to_radians(), 0.0);
             Action::Redraw
         }
-        (KeyModifiers::NONE, KeyCode::Char('s')) => {
+        (KeyModifiers::NONE, KeyCode::Char('d')) => {
             camera.orbit(5.0_f64.to_radians(), 0.0);
             Action::Redraw
         }
-        (KeyModifiers::NONE, KeyCode::Char('a')) => {
-            camera.orbit(0.0, -5.0_f64.to_radians());
+        (KeyModifiers::NONE, KeyCode::Char('w')) => {
+            camera.orbit(0.0, 5.0_f64.to_radians());
             Action::Redraw
         }
-        (KeyModifiers::NONE, KeyCode::Char('d')) => {
-            camera.orbit(0.0, 5.0_f64.to_radians());
+        (KeyModifiers::NONE, KeyCode::Char('s')) => {
+            camera.orbit(0.0, -5.0_f64.to_radians());
             Action::Redraw
         }
 
