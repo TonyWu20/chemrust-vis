@@ -20,36 +20,51 @@ use super::widgets::status_bar::StatusBar;
 pub struct App {
     scene: Scene,
     camera: Camera,
+    /// Initial camera target (for reset).
+    initial_target: [f64; 3],
+    /// Initial camera radius (for reset).
+    initial_radius: f64,
     viewport: Viewport,
     file_path: PathBuf,
+    /// Count of non-periodic atoms for display.
+    num_atoms: usize,
     running: bool,
 }
 
 impl App {
     /// Create a new App from a loaded scene and file path.
     pub fn new(scene: Scene, file_path: PathBuf) -> Self {
-        let center = scene.bounding_box_center();
+        // Use the cell's geometric center for centering, not the atom cloud
+        // (which includes periodic replicas that shift the centroid).
+        let center = scene.center_for_view();
 
-        // Compute initial camera: auto-frame the structure.
-        // Radius = distance from target → camera. Use diagonal * 0.6 so the
-        // structure fills ~70% of the viewport with the default focal length.
         let (min, max) = bounding_box_corners(&scene);
-        let diag = ((max[0] - min[0]).powi(2) + (max[1] - min[1]).powi(2) + (max[2] - min[2]).powi(2)).sqrt();
+        let diag = ((max[0] - min[0]).powi(2)
+            + (max[1] - min[1]).powi(2)
+            + (max[2] - min[2]).powi(2))
+        .sqrt();
         let radius = (diag * 0.6).max(5.0);
 
+        let num_atoms = scene.atoms.iter().filter(|a| !a.is_periodic_image).count();
         let camera = Camera::from_target(center, radius);
 
         App {
             scene,
             camera,
-            viewport: Viewport::new(160.0, 96.0), // default; updated on first resize
+            initial_target: center,
+            initial_radius: radius,
+            viewport: Viewport::new(160.0, 96.0),
             file_path,
+            num_atoms,
             running: true,
         }
     }
 
     /// Run the main event loop.
-    pub fn run(&mut self, terminal: &mut Terminal<impl ratatui::backend::Backend>) -> io::Result<()> {
+    pub fn run(
+        &mut self,
+        terminal: &mut Terminal<impl ratatui::backend::Backend>,
+    ) -> io::Result<()> {
         while self.running {
             terminal.draw(|f| {
                 self.draw(f);
@@ -58,12 +73,18 @@ impl App {
             match event::read()? {
                 Event::Key(key) => {
                     let action = input::handle_key_event(key, &mut self.camera);
-                    if action == Action::Quit {
-                        self.running = false;
+                    match action {
+                        Action::Quit => self.running = false,
+                        Action::Reset => {
+                            self.camera =
+                                Camera::from_target(self.initial_target, self.initial_radius);
+                        }
+                        _ => {}
                     }
                 }
                 Event::Resize(cols, rows) => {
-                    self.viewport = Viewport::new(cols as f64 * 2.0, rows as f64 * 4.0);
+                    // Block rendering: 2 dots per column, 2 dots per row
+                    self.viewport = Viewport::new(cols as f64 * 2.0, rows as f64 * 2.0);
                 }
                 _ => {}
             }
@@ -73,49 +94,33 @@ impl App {
 
     /// Draw a single frame.
     fn draw(&mut self, f: &mut ratatui::Frame) {
-        // Sync viewport size to terminal area before rendering
         let area = f.area();
-        self.viewport = Viewport::new(
-            area.width as f64 * 2.0,
-            area.height as f64 * 4.0,
-        );
+        // Block rendering: 2 dots per column, 2 dots per row
+        self.viewport = Viewport::new(area.width as f64 * 2.0, area.height as f64 * 2.0);
         let draw_cmds = self.viewport.render(&self.scene, &self.camera);
 
         let layout = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Min(1),       // scene view fills remaining space
-                Constraint::Length(1),    // status bar
-            ])
+            .constraints([Constraint::Min(1), Constraint::Length(1)])
             .split(f.area());
 
-        // Scene view
         f.render_widget(SceneWidget::new(&draw_cmds), layout[0]);
 
-        // Status bar
-        let theta_deg = self.camera_theta_deg();
-        let phi_deg = self.camera_phi_deg();
         f.render_widget(
             StatusBar {
-                file_name: self.file_path.file_name()
+                file_name: self
+                    .file_path
+                    .file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or("unknown")
                     .to_string(),
-                atom_count: self.scene.atoms.len(),
-                theta_deg,
-                phi_deg,
+                atom_count: self.num_atoms,
+                theta_deg: self.camera.theta().to_degrees(),
+                phi_deg: self.camera.phi().to_degrees(),
                 radius: self.camera.radius(),
             },
             layout[1],
         );
-    }
-
-    fn camera_theta_deg(&self) -> f64 {
-        self.camera.theta().to_degrees()
-    }
-
-    fn camera_phi_deg(&self) -> f64 {
-        self.camera.phi().to_degrees()
     }
 }
 

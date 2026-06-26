@@ -147,6 +147,25 @@ impl Scene {
         }
         [sum[0] / n, sum[1] / n, sum[2] / n]
     }
+
+    /// Return the best center for camera framing.
+    ///
+    /// For periodic structures: geometric cell center = (a+b+c)/2,
+    /// unaffected by periodic replicas. For molecules: atom centroid.
+    pub fn center_for_view(&self) -> [f64; 3] {
+        if self.cell_edges.is_empty() {
+            return self.bounding_box_center();
+        }
+        // The first three edges from origin give the lattice vectors a, b, c.
+        // Edge[0] = origin→a, edge[1] = origin→b, edge[2] = origin→c.
+        let (_, a) = self.cell_edges[0];
+        let (_, b) = self.cell_edges[1];
+        let (_, c) = self.cell_edges[2];
+        let cx = (a[0] + b[0] + c[0]) / 2.0;
+        let cy = (a[1] + b[1] + c[1]) / 2.0;
+        let cz = (a[2] + b[2] + c[2]) / 2.0;
+        [cx, cy, cz]
+    }
 }
 
 /// Build the 12 edges of the unit cell parallelepiped from lattice vectors.

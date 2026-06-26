@@ -8,6 +8,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 pub enum Action {
     Quit,
     Redraw,
+    Reset,
     None,
 }
 
@@ -60,6 +61,9 @@ pub fn handle_key_event(key: KeyEvent, camera: &mut Camera) -> Action {
             camera.zoom(-2.0);
             Action::Redraw
         }
+
+        // Reset camera
+        (KeyModifiers::NONE, KeyCode::Char('r')) => Action::Reset,
 
         // Pan: Shift+WASD
         (KeyModifiers::SHIFT, KeyCode::Char('W')) => {
