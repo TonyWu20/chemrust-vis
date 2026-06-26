@@ -31,9 +31,11 @@ impl App {
         let center = scene.bounding_box_center();
 
         // Compute initial camera: auto-frame the structure.
+        // Radius = distance from target → camera. Use diagonal * 0.6 so the
+        // structure fills ~70% of the viewport with the default focal length.
         let (min, max) = bounding_box_corners(&scene);
         let diag = ((max[0] - min[0]).powi(2) + (max[1] - min[1]).powi(2) + (max[2] - min[2]).powi(2)).sqrt();
-        let radius = (diag * 0.75).max(1.0);
+        let radius = (diag * 0.6).max(5.0);
 
         let camera = Camera::from_target(center, radius);
 

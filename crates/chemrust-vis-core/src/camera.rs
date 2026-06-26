@@ -95,21 +95,43 @@ impl Camera {
     }
 
     /// Perspective projection: returns (NDC position, perspective scale factor).
-    ///
-    /// The perspective scale factor can be used to compute on-screen atom radius:
-    /// `screen_radius = base_radius * persp_scale`.
-    ///
-    /// `fov_scale` controls the field of view (larger = wider FOV, like focal length).
     pub fn project_perspective(
         &self,
         world_pt: &Point3<f64>,
         fov_scale: f64,
     ) -> (Point3<f64>, f64) {
         let view_pt = self.view_matrix() * world_pt;
-        let depth = (-view_pt.z).max(0.01); // prevent division by zero / behind camera
+        let depth = (-view_pt.z).max(0.01);
         let persp = fov_scale / depth;
         let ndc = Point3::new(view_pt.x * persp, view_pt.y * persp, view_pt.z);
         (ndc, persp)
+    }
+
+    /// Project a world point directly to canvas dot coordinates.
+    ///
+    /// The camera's look-at target maps to the viewport center `(width/2, height/2)`.
+    /// Returns `(canvas_x, canvas_y, view_z, persp_scale)`.
+    ///
+    /// - `canvas_x`, `canvas_y`: dot coordinates (0 = left/top edge)
+    /// - `view_z`: view-space Z (negative = in front of camera, for depth sort)
+    /// - `persp_scale`: perspective factor for computing atom screen radius
+    ///   (`screen_radius = base_radius * persp_scale`)
+    pub fn project_to_screen(
+        &self,
+        world_pt: &Point3<f64>,
+        focal: f64,
+        viewport_w: f64,
+        viewport_h: f64,
+    ) -> (f64, f64, f64, f64) {
+        let view_pt = self.view_matrix() * world_pt;
+        let depth = (-view_pt.z).max(0.01);
+        let persp = focal / depth;
+        // Screen X: view+x goes right → canvas+x goes right
+        let sx = view_pt.x * persp + viewport_w / 2.0;
+        // Screen Y: view+y goes up → canvas+y goes up (but canvas origin is top-left)
+        // In view space, +Y is up. In canvas, +Y is down. So we flip:
+        let sy = -view_pt.y * persp + viewport_h / 2.0;
+        (sx, sy, view_pt.z, persp)
     }
 
     /// Get the current target.
