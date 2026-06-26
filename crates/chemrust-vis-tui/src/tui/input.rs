@@ -1,6 +1,7 @@
-//! Keyboard input handling: maps key events to camera actions.
+//! Keyboard input handling: maps key events to camera and viewport actions.
 
 use chemrust_vis_core::camera::Camera;
+use chemrust_vis_core::viewport::Viewport;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 /// Actions the app can take in response to input.
@@ -12,8 +13,8 @@ pub enum Action {
     None,
 }
 
-/// Map a key event to a camera mutation. Returns the action to take.
-pub fn handle_key_event(key: KeyEvent, camera: &mut Camera) -> Action {
+/// Map a key event to camera/viewport mutations. Returns the action to take.
+pub fn handle_key_event(key: KeyEvent, camera: &mut Camera, viewport: &mut Viewport) -> Action {
     // Only process key press events (not releases or repeats).
     if key.kind != KeyEventKind::Press {
         return Action::None;
@@ -65,26 +66,25 @@ pub fn handle_key_event(key: KeyEvent, camera: &mut Camera) -> Action {
         // Reset camera
         (KeyModifiers::NONE, KeyCode::Char('r')) => Action::Reset,
 
-        // Pan: Shift+WASD (also match uppercase char without SHIFT modifier —
-        // some terminals send just the uppercase letter)
+        // Pan: Shift+WASD (viewport-space offset in dot units)
         (KeyModifiers::SHIFT, KeyCode::Char('W'))
         | (KeyModifiers::NONE, KeyCode::Char('W')) => {
-            camera.pan(0.0, 1.0);
+            viewport.pan(0.0, 10.0);
             Action::Redraw
         }
         (KeyModifiers::SHIFT, KeyCode::Char('S'))
         | (KeyModifiers::NONE, KeyCode::Char('S')) => {
-            camera.pan(0.0, -1.0);
+            viewport.pan(0.0, -10.0);
             Action::Redraw
         }
         (KeyModifiers::SHIFT, KeyCode::Char('A'))
         | (KeyModifiers::NONE, KeyCode::Char('A')) => {
-            camera.pan(-1.0, 0.0);
+            viewport.pan(10.0, 0.0);
             Action::Redraw
         }
         (KeyModifiers::SHIFT, KeyCode::Char('D'))
         | (KeyModifiers::NONE, KeyCode::Char('D')) => {
-            camera.pan(1.0, 0.0);
+            viewport.pan(-10.0, 0.0);
             Action::Redraw
         }
 

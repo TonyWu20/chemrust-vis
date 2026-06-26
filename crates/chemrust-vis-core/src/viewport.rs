@@ -47,13 +47,28 @@ pub struct DrawCommands {
 pub struct Viewport {
     width: f64,
     height: f64,
+    /// Pan offset in canvas dot units (x, y).
+    pub pan_x: f64,
+    pub pan_y: f64,
 }
 
 impl Viewport {
     /// Create a new viewport with given canvas dimensions in dot units.
-    /// Width = cols × 2, height = rows × 4 for Braille rendering.
+    /// Width = cols × 2, height = rows × 2 for block rendering.
     pub fn new(width: f64, height: f64) -> Self {
-        Viewport { width, height }
+        Viewport { width, height, pan_x: 0.0, pan_y: 0.0 }
+    }
+
+    /// Pan the view by an offset in canvas dot units.
+    pub fn pan(&mut self, dx: f64, dy: f64) {
+        self.pan_x += dx;
+        self.pan_y += dy;
+    }
+
+    /// Reset pan to zero.
+    pub fn reset_pan(&mut self) {
+        self.pan_x = 0.0;
+        self.pan_y = 0.0;
     }
 
     /// Render a scene through a camera into draw commands.
@@ -102,20 +117,22 @@ impl Viewport {
         // Scale to fill 85% of viewport, preserving aspect ratio
         let margin = 0.85;
         let scale = (self.width * margin / data_w).min(self.height * margin / data_h);
-        // Center on camera's optical axis (0,0 in view-space XY).
-        // The camera target maps to the viewport center.
-        // Pan → target moves → view-space positions shift → structure pans.
-        let cx = self.width / 2.0;
-        let cy = self.height / 2.0;
+        // Center on data's view-space midpoint + pan offset.
+        // Camera target move (via Camera::pan) shifts view-space positions.
+        // Viewport::pan() adds an additional canvas-level offset.
+        let data_cx = (min_x + max_x) / 2.0;
+        let data_cy = (min_y + max_y) / 2.0;
+        let cx = self.width / 2.0 + self.pan_x;
+        let cy = self.height / 2.0 + self.pan_y;
         // Atom radius: 5% of viewport shorter dimension, scaled to world units
         let atom_radius = (self.width.min(self.height) * 0.05 / scale).max(0.5);
 
-        // Step 3: map to canvas with centering on camera axis (0,0) and scaling
+        // Step 3: map to canvas with centering on data centroid + pan offset
         let mut point_data: Vec<(DrawPoint, f64)> = view_pts
             .iter()
             .map(|(vp, atom)| {
-                let sx = vp.x * scale + cx;
-                let sy = -vp.y * scale + cy; // flip Y: view +Y = up, canvas +Y = down
+                let sx = (vp.x - data_cx) * scale + cx;
+                let sy = -(vp.y - data_cy) * scale + cy;
                 let dp = DrawPoint {
                     x: sx,
                     y: sy,
@@ -132,7 +149,7 @@ impl Viewport {
         point_data.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
         let points: Vec<DrawPoint> = point_data.into_iter().map(|(dp, _)| dp).collect();
 
-        // Step 4: project cell edges (centered on camera axis)
+        // Step 4: project cell edges (centered on data centroid + pan)
         let lines: Vec<DrawLine> = scene
             .cell_edges
             .iter()
@@ -140,10 +157,10 @@ impl Viewport {
                 let s = view_matrix * Point3::new(start[0], start[1], start[2]);
                 let e = view_matrix * Point3::new(end[0], end[1], end[2]);
                 DrawLine {
-                    x1: s.x * scale + cx,
-                    y1: -s.y * scale + cy,
-                    x2: e.x * scale + cx,
-                    y2: -e.y * scale + cy,
+                    x1: (s.x - data_cx) * scale + cx,
+                    y1: -(s.y - data_cy) * scale + cy,
+                    x2: (e.x - data_cx) * scale + cx,
+                    y2: -(e.y - data_cy) * scale + cy,
                 }
             })
             .collect();

@@ -82,12 +82,13 @@ impl App {
 
             match event::read()? {
                 Event::Key(key) => {
-                    let action = input::handle_key_event(key, &mut self.camera);
+                    let action = input::handle_key_event(key, &mut self.camera, &mut self.viewport);
                     match action {
                         Action::Quit => self.running = false,
                         Action::Reset => {
                             self.camera =
                                 Camera::from_target(self.initial_target, self.initial_radius);
+                            self.viewport.reset_pan();
                         }
                         _ => {}
                     }
