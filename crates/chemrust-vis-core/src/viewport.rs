@@ -102,20 +102,21 @@ impl Viewport {
         // Scale to fill 80% of viewport, preserving aspect ratio
         let margin = 0.85;
         let scale = (self.width * margin / data_w).min(self.height * margin / data_h);
-        // Center offset in canvas dot units
+        // Center on the camera's optical axis (view-space origin).
+        // The camera target projects to (0, 0) in view-space XY.
+        // Pan shifts the target, which shifts all view-space positions,
+        // so the data bounding box moves and the structure pans on screen.
         let cx = self.width / 2.0;
         let cy = self.height / 2.0;
-        let data_cx = (min_x + max_x) / 2.0;
-        let data_cy = (min_y + max_y) / 2.0;
         // Atom radius: 5% of viewport shorter dimension, scaled to world units
         let atom_radius = (self.width.min(self.height) * 0.05 / scale).max(0.5);
 
-        // Step 3: map to canvas with centering and scaling
+        // Step 3: map to canvas with centering on camera axis (0,0) and scaling
         let mut point_data: Vec<(DrawPoint, f64)> = view_pts
             .iter()
             .map(|(vp, atom)| {
-                let sx = (vp.x - data_cx) * scale + cx;
-                let sy = -(vp.y - data_cy) * scale + cy; // flip Y: view +Y = up, canvas +Y = down
+                let sx = vp.x * scale + cx;
+                let sy = -vp.y * scale + cy; // flip Y: view +Y = up, canvas +Y = down
                 let dp = DrawPoint {
                     x: sx,
                     y: sy,
@@ -132,7 +133,7 @@ impl Viewport {
         point_data.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
         let points: Vec<DrawPoint> = point_data.into_iter().map(|(dp, _)| dp).collect();
 
-        // Step 4: project cell edges
+        // Step 4: project cell edges (centered on camera axis)
         let lines: Vec<DrawLine> = scene
             .cell_edges
             .iter()
@@ -140,10 +141,10 @@ impl Viewport {
                 let s = view_matrix * Point3::new(start[0], start[1], start[2]);
                 let e = view_matrix * Point3::new(end[0], end[1], end[2]);
                 DrawLine {
-                    x1: (s.x - data_cx) * scale + cx,
-                    y1: -(s.y - data_cy) * scale + cy,
-                    x2: (e.x - data_cx) * scale + cx,
-                    y2: -(e.y - data_cy) * scale + cy,
+                    x1: s.x * scale + cx,
+                    y1: -s.y * scale + cy,
+                    x2: e.x * scale + cx,
+                    y2: -e.y * scale + cy,
                 }
             })
             .collect();
