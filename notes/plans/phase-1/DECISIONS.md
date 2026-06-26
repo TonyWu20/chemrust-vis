@@ -85,6 +85,39 @@ Spherical coordinates (θ azimuthal, φ polar, r radius) around a target point. 
 natural parameterization for orbit controls. The view matrix is computed as
 `Isometry3::look_at_rh(&pos, &target, &up)`.
 
+### A5: Z-up coordinate convention (physics convention)
+
+Theta = azimuthal angle in XY plane (0 = +X, π/2 = +Y). Phi = polar angle from Z axis
+(0 = +Z, π/2 = XY plane, π = -Z). Camera position = `target + r * (sinφ·cosθ, sinφ·sinθ, cosφ)`.
+Up vector = (0, 0, 1).
+
+**Rationale:** Crystal structures naturally have the c-axis as "vertical." chemrust-geometry's
+`align_axes()` puts c along +Z. The Cu111_CO fixture has c = (0, 0, 18.26) — Z axis.
+
+### A6: Lib-crate color type (RgbColor)
+
+`chemrust-vis-core` defines `pub struct RgbColor(pub u8, pub u8, pub u8)` in `scene.rs`.
+`AtomDrawData.color` uses `RgbColor`, NOT `ratatui::style::Color`. The bin crate converts
+`RgbColor → ratatui::style::Color::Rgb(r, g, b)` in `SceneWidget`.
+
+**Rationale:** The CONTEXT.md boundary rule states the lib crate has minimal ratatui coupling
+and that Scene is renderer-agnostic (ADR-0001 consequence). A future SVG or sixel renderer
+can consume `RgbColor` without pulling in ratatui.
+
+### A7: Molecule handling (cell=None path)
+
+When `Structure.cell` is `None` (isolated molecule), `Scene::from_structure()` treats
+`frac_coords` values directly as Cartesian coordinates (Å). Fractional coordinates have
+no meaning without a reference cell, and chemrust-geometry represents isolated molecules
+with `cell: None`. This avoids `Result<Scene, Error>` for the common molecule case.
+
+### A8: Module split — Camera separate from Viewport
+
+CONTEXT.md §3.1 originally placed Camera inside `viewport.rs`. TASKS.md splits Camera into
+its own `camera.rs` module. This is the correct split: Camera is independently testable
+and reusable (MCP server in Phase 3 may use camera math without the viewport). Viewport
+depends on Camera + Scene.
+
 ## Domain Terms Validated
 
 All terms used match the CONTEXT.md glossary. No refinements needed.
@@ -96,3 +129,5 @@ All terms used match the CONTEXT.md glossary. No refinements needed.
 - **Viewport** — as defined in CONTEXT.md §2.2
 - **Camera** — as defined in CONTEXT.md §2.2
 - **Projection** — as defined in CONTEXT.md §2.2, orthographic only for Phase 1
+- **RgbColor** — new term: `RgbColor(u8, u8, u8)` in lib crate; distinct from `ratatui::style::Color`. Defined in CONTEXT.md §2.2 implicitly as part of AtomDrawData color assignment.
+- **Z-up convention** — new term: coordinate system where +Z is "up" (c-axis direction). Theta = azimuthal (XY plane), phi = polar (from Z). Added to CONTEXT.md §2.3 as a spatial convention.

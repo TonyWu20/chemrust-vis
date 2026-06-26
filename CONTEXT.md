@@ -57,12 +57,14 @@ See `chemrust-geometry/src/lib.rs:7-34` for the authoritative module structure.
 | **MCP Tool** | A mutating operation exposed to AI agents via the Model Context Protocol. Examples: `remove_atoms(indices)`, `set_element(index, element)`, `transform_selection(matrix)`, `duplicate_selection()`, `group_selection(label)`. Tools modify the scene/Structure. | "action", "command", "operation" |
 | **MCP Resource** | A read-only view of state exposed to AI agents. Examples: `scene/atoms` (list all atoms with positions), `scene/selection` (current selection), `scene/cell` (lattice parameters). Resources are polled by the AI to understand current state. | "endpoint", "query" |
 | **Projection** | The mathematical mapping from 3D world coordinates to 2D terminal coordinates. Orthographic by default (toggleable to perspective). Computed using nalgebra projection matrices. | "render", "draw" |
+| **RgbColor** | Newtype `RgbColor(u8, u8, u8)` in the lib crate. Renderer-agnostic color type — converted to `ratatui::style::Color` in the bin crate, or to SVG hex in a future renderer. | "color" (ambiguous — RgbColor is the lib type, ratatui::Color is the bin type) |
 
 ### 2.3 Ambiguities resolved
 
 - **"Cell"** — Always means the periodic boundary box (`LatticeVectors`). Never use "cell" as short for "unit cell parameters" (that's `CellConstants`). Never use to mean "grid cell" or "table cell."
 - **"Atom"** — An entry in the `Structure` struct-of-arrays at a given index. Has a species, coordinate, tag, and optional label. Not a standalone struct — there is no `Atom` type.
 - **"Transform" vs "apply"** — `transform(T)` queues a matrix lazily. `apply()` forces composition and modifies coordinates. The distinction matters: operations like `replicate_along_c` and `with_atoms` need real coordinates, so they force-apply internally.
+- **Coordinate system** — Z-up (physics convention). Theta = azimuthal angle in XY plane (0 = +X, π/2 = +Y). Phi = polar angle from Z axis (0 = +Z looking down). This matches chemrust-geometry's `align_axes()` which puts the c-axis along +Z. All camera math and projection assumes this convention.
 
 ---
 
@@ -82,10 +84,12 @@ chemrust-vis/
       Cargo.toml
       src/
         lib.rs            # public API, re-exports
-        scene.rs          # Scene, AtomRenderData, BondRenderData
-        viewport.rs       # Viewport, Camera, projection math
-        selection.rs      # Selection, group operations
-        mcp/              # MCP server module
+        scene.rs          # Scene, AtomDrawData, RgbColor, element_color()
+        camera.rs         # Camera: spherical coords, view matrix, orthographic projection
+        viewport.rs       # Viewport: project 3D→2D, depth sort, produce DrawCommands
+        loader.rs         # CASTEP .cell parser (feature-gated: "castep-loader")
+        selection.rs      # Selection, group operations (Phase 2+)
+        mcp/              # MCP server module (Phase 3+)
           mod.rs
           tools.rs        # MCP tool implementations
           resources.rs    # MCP resource implementations
@@ -105,7 +109,7 @@ chemrust-vis/
 ```
 
 **Boundary rules:**
-- `chemrust-vis-core` depends on `chemrust-geometry` (path dep), `nalgebra`, `ratatui` (for canvas rendering types), `mcp-server`, `serde`/`serde_json`. It has **zero** dependency on `crossterm` (that's the TUI binary's concern).
+- `chemrust-vis-core` depends on `chemrust-geometry` (path dep), `nalgebra`, `serde`/`serde_json`. The lib crate has **zero** dependency on `crossterm` and **minimal** ratatui coupling (only if needed for canvas types in a future phase; for Phase 1, ratatui is only in the bin crate). The color type `RgbColor` is defined in the lib crate to avoid pulling in `ratatui::style::Color`.
 - `chemrust-vis-tui` depends on `chemrust-vis-core`, `ratatui`, `crossterm`, `anyhow`, `clap`.
 - The lib crate exposes all domain types and rendering logic. The binary crate handles terminal I/O, event loop, and CLI argument parsing.
 
@@ -155,8 +159,6 @@ switch to a versioned dependency.
 |-------|---------|---------|----------------|
 | `chemrust-geometry` | path | Domain types (Structure, LatticeVectors, etc.) | Single source of truth for structure data |
 | `nalgebra` | 0.33 | 3D linear algebra: camera transforms, projections, ray-casting for selection | Already used by chemrust-geometry; consistent math library |
-| `ratatui` | latest | Terminal UI framework; canvas widget for Braille-dot rendering | Most popular Rust TUI lib; built-in canvas with Braille support |
-| `mcp-server` | latest | Model Context Protocol server implementation | Avoids hand-rolling JSON-RPC transport |
 | `serde` + `serde_json` | latest | Serialization for MCP messages and export formats | Standard Rust serialization |
 
 ### 4.2 Binary dependencies (bin crate)
