@@ -9,9 +9,9 @@ pub fn encode_sixel(buf: &[[u8; 3]], width: usize, height: usize) -> String {
     let sixel_rows = height / 6;
     let mut out = String::new();
 
-    // Sixel header: P2=1 for HIRES mode, raster attributes
+    // Sixel header
     use std::fmt::Write;
-    let _ = write!(out, "\x1bP0;0;0q\"1;1;{};{}", width, height);
+    let _ = write!(out, "\x1bPq");
 
     let mut last_color: [u8; 3] = [255, 255, 255];
 

@@ -54,24 +54,32 @@ fn main() -> Result<()> {
     }
 
     if cli.sixel {
-        // Single-frame sixel render
         use chemrust_vis_core::camera::Camera;
         use chemrust_vis_core::viewport::Viewport;
         use crate::tui::sixel;
+        use std::io::Write;
+
         let center = scene.center_for_view();
         let camera = Camera::from_target(center, 16.0);
-        let (cols, rows) = crossterm::terminal::size()
-            .unwrap_or((80, 24));
-        let mut vp = Viewport::new(cols as f64 * 12.0, rows as f64 * 24.0);
+        let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
+        let vp = Viewport::new(cols as f64 * 12.0, rows as f64 * 24.0);
         let cmds = vp.render(&scene, &camera);
-        let (_w, _h, pixels) = sixel::render_to_pixels(&cmds, cols as usize * 12, rows as usize * 24);
-        let data = sixel::encode_sixel(&pixels, _w, _h);
-        use std::io::Write;
-        std::io::stdout().write_all(data.as_bytes())?;
-        std::io::stdout().flush()?;
-        // Wait for keypress so the image stays visible
-        use crossterm::event::read;
-        let _ = read();
+        let (w, h, pixels) = sixel::render_to_pixels(&cmds, cols as usize * 12, rows as usize * 24);
+        eprintln!("Rendered {}×{} pixels, {} atoms, {} edges",
+            w, h, cmds.points.len(), cmds.lines.len());
+        let data = sixel::encode_sixel(&pixels, w, h);
+        eprintln!("Sixel data: {} bytes", data.len());
+
+        let mut stdout = std::io::stdout();
+        write!(stdout, "\x1b[2J\x1b[H")?; // clear screen, home cursor
+        stdout.write_all(data.as_bytes())?;
+        stdout.flush()?;
+        // Use raw mode for key read
+        enable_raw_mode()?;
+        eprint!("\r\nPress any key to exit...");
+        let _ = crossterm::event::read();
+        disable_raw_mode()?;
+        execute!(std::io::stdout(), crossterm::terminal::Clear(crossterm::terminal::ClearType::All))?;
         return Ok(());
     }
 
