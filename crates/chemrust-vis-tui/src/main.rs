@@ -69,6 +69,9 @@ fn main() -> Result<()> {
         use std::io::Write;
         std::io::stdout().write_all(data.as_bytes())?;
         std::io::stdout().flush()?;
+        // Wait for keypress so the image stays visible
+        use crossterm::event::read;
+        let _ = read();
         return Ok(());
     }
 
