@@ -118,9 +118,9 @@ impl App {
             }
         }
 
-        // Braille: 2×4 dots per character
+        // Half-block: 2×2 dots per character
         self.viewport.width = area.width as f64 * 2.0;
-        self.viewport.height = scene_rows as f64 * 4.0;
+        self.viewport.height = scene_rows as f64 * 2.0;
         let draw_cmds = self.viewport.render(&self.scene, &self.camera);
         let layout = Layout::default()
             .direction(Direction::Vertical)

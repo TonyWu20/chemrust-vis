@@ -132,8 +132,8 @@ impl Viewport {
         let data_cy = (min_y + max_y) / 2.0;
         let cx = self.width / 2.0 + self.pan_x;
         let cy = self.height / 2.0 + self.pan_y;
-        // Atom radius: 5% of viewport shorter dimension, scaled to world units
-        let atom_radius = (self.width.min(self.height) * 0.05 / scale).max(0.5);
+        // Atom radius: 6% of viewport shorter dimension
+        let atom_radius = (self.width.min(self.height) * 0.06 / scale).max(1.0);
 
         // Step 3: map to canvas with centering on data centroid + pan offset
         let mut point_data: Vec<(DrawPoint, f64)> = view_pts
