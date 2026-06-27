@@ -131,9 +131,9 @@ impl App {
 
         // Axis indicator: bottom-left corner of scene area, 10×6 chars
         let axis_area = Rect {
-            x: 0,
-            y: layout[0].height.saturating_sub(6),
-            width: 10.min(layout[0].width),
+            x: 2,
+            y: layout[0].height.saturating_sub(8),
+            width: 10.min(layout[0].width.saturating_sub(2)),
             height: 6.min(layout[0].height),
         };
         f.render_widget(AxisIndicator::new(&self.camera), axis_area);
