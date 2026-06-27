@@ -152,18 +152,14 @@ fn tool_get_state(id: &Value, state: &Arc<Mutex<SharedState>>) -> Value {
     })
 }
 
-/// Render DrawCommands to a text grid using quadrant block characters.
+/// Render DrawCommands to a text grid using Braille dot characters.
 fn render_to_text(cmds: &chemrust_vis_core::viewport::DrawCommands, cols: usize, rows: usize) -> String {
-    const Q: [char; 16] = [
-        ' ', '▗', '▝', '▐', '▖', '▄', '▞', '▟',
-        '▘', '▚', '▀', '▜', '▌', '▙', '▛', '█',
-    ];
-    let mut bits = vec![vec![0u8; cols]; rows];
+    let mut chars = vec![vec![0x2800u32; cols]; rows];
     let dot_w = cols as f64 * 2.0;
-    let dot_h = rows as f64 * 2.0;
+    let dot_h = rows as f64 * 4.0;
 
     for line in &cmds.lines {
-        draw_line(&mut bits, cols, rows, line.x1, line.y1, line.x2, line.y2);
+        draw_line_braille(&mut chars, cols, rows, line.x1, line.y1, line.x2, line.y2);
     }
     for pt in &cmds.points {
         if pt.x < -pt.radius || pt.x > dot_w + pt.radius || pt.y < -pt.radius || pt.y > dot_h + pt.radius {
@@ -173,7 +169,7 @@ fn render_to_text(cmds: &chemrust_vis_core::viewport::DrawCommands, cols: usize,
         for dy in -r..=r {
             for dx in -r..=r {
                 if (dx as f64).powi(2) + (dy as f64).powi(2) <= pt.radius.powi(2) {
-                    set_quadrant(&mut bits, cols, rows, pt.x + dx as f64, pt.y + dy as f64);
+                    set_braille(&mut chars, cols, rows, pt.x + dx as f64, pt.y + dy as f64);
                 }
             }
         }
@@ -182,37 +178,36 @@ fn render_to_text(cmds: &chemrust_vis_core::viewport::DrawCommands, cols: usize,
     let mut out = String::with_capacity((cols + 1) * rows);
     for row in 0..rows {
         for col in 0..cols {
-            out.push(Q[bits[row][col] as usize]);
+            out.push(char::from_u32(chars[row][col]).unwrap_or(' '));
         }
         out.push('\n');
     }
     out
 }
 
-fn set_quadrant(bits: &mut [Vec<u8>], cols: usize, rows: usize, x: f64, y: f64) {
+fn set_braille(chars: &mut [Vec<u32>], cols: usize, rows: usize, x: f64, y: f64) {
     let col = (x / 2.0).floor() as usize;
-    let row = (y / 2.0).floor() as usize;
+    let row = (y / 4.0).floor() as usize;
     if col < cols && row < rows {
-        let bit: u8 = match ((x as usize) % 2, (y as usize) % 2) {
-            (0, 0) => 8, (1, 0) => 4, (0, 1) => 2, (1, 1) => 1, _ => 0,
-        };
-        bits[row][col] |= bit;
+        let xm = (x as usize) % 2;
+        let ym = (y as usize) % 4;
+        let dot = if ym < 3 { xm * 3 + ym } else { xm + 6 };
+        chars[row][col] |= 1u32 << dot;
     }
 }
 
-fn draw_line(bits: &mut [Vec<u8>], cols: usize, rows: usize, x1: f64, y1: f64, x2: f64, y2: f64) {
+fn draw_line_braille(chars: &mut [Vec<u32>], cols: usize, rows: usize, x1: f64, y1: f64, x2: f64, y2: f64) {
     let (mut x, mut y) = (x1 as i64, y1 as i64);
     let (x2i, y2i) = (x2 as i64, y2 as i64);
-    let dx = (x2i - x).abs();
-    let dy = -(y2i - y).abs();
-    let sx = if x < x2i { 1 } else { -1 };
-    let sy = if y < y2i { 1 } else { -1 };
+    let dx = (x2i - x).abs(); let dy = -(y2i - y).abs();
+    let sx = if x < x2i { 1 } else { -1 }; let sy = if y < y2i { 1 } else { -1 };
     let mut err = dx + dy;
     loop {
-        set_quadrant(bits, cols, rows, x as f64, y as f64);
+        set_braille(chars, cols, rows, x as f64, y as f64);
         if x == x2i && y == y2i { break; }
         let e2 = 2 * err;
         if e2 >= dy { if x == x2i { break; } err += dy; x += sx; }
         if e2 <= dx { if y == y2i { break; } err += dx; y += sy; }
     }
 }
+

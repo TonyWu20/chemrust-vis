@@ -109,7 +109,7 @@ impl App {
         // Block rendering: 2 dots per column, 2 dots per row
         // Update viewport dimensions without resetting pan/zoom
         self.viewport.width = area.width as f64 * 2.0;
-        self.viewport.height = area.height as f64 * 2.0;
+        self.viewport.height = area.height as f64 * 4.0;
         self.viewport.set_zoom_from_radius(self.camera.radius(), self.initial_radius);
 
         // Sync camera state to MCP server
