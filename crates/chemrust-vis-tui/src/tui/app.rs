@@ -106,10 +106,7 @@ impl App {
     /// Draw a single frame.
     fn draw(&mut self, f: &mut ratatui::Frame) {
         let area = f.area();
-        // Block rendering: 2 dots per column, 2 dots per row
-        // Update viewport dimensions without resetting pan/zoom
-        self.viewport.width = area.width as f64 * 2.0;
-        self.viewport.height = area.height as f64 * 4.0;
+        let scene_rows = if area.height > 1 { area.height - 1 } else { area.height };
         self.viewport.set_zoom_from_radius(self.camera.radius(), self.initial_radius);
 
         // Sync camera state to MCP server
@@ -121,15 +118,17 @@ impl App {
             }
         }
 
+        // Braille: 2×4 dots per character
+        self.viewport.width = area.width as f64 * 2.0;
+        self.viewport.height = scene_rows as f64 * 4.0;
         let draw_cmds = self.viewport.render(&self.scene, &self.camera);
-
         let layout = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Min(1), Constraint::Length(1)])
             .split(f.area());
-
         f.render_widget(SceneWidget::new(&draw_cmds), layout[0]);
 
+        // Status bar
         f.render_widget(
             StatusBar {
                 file_name: self

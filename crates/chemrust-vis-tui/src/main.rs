@@ -32,6 +32,10 @@ struct Cli {
     /// Start a background MCP TCP server on this port alongside the TUI.
     #[arg(long, default_value_t = 0)]
     mcp_port: u16,
+
+    /// Render a single frame as sixel and exit (no TUI).
+    #[arg(long)]
+    sixel: bool,
 }
 
 fn main() -> Result<()> {
@@ -44,9 +48,27 @@ fn main() -> Result<()> {
     let scene = Scene::from_structure(&structure);
 
     if cli.mcp {
-        // Run MCP server — blocks on stdin/stdout JSON-RPC.
         eprintln!("chemrust-vis MCP server started. Waiting for client...");
         chemrust_vis_core::mcp::run_mcp_server(scene)?;
+        return Ok(());
+    }
+
+    if cli.sixel {
+        // Single-frame sixel render
+        use chemrust_vis_core::camera::Camera;
+        use chemrust_vis_core::viewport::Viewport;
+        use crate::tui::sixel;
+        let center = scene.center_for_view();
+        let camera = Camera::from_target(center, 16.0);
+        let (cols, rows) = crossterm::terminal::size()
+            .unwrap_or((80, 24));
+        let mut vp = Viewport::new(cols as f64 * 12.0, rows as f64 * 24.0);
+        let cmds = vp.render(&scene, &camera);
+        let (_w, _h, pixels) = sixel::render_to_pixels(&cmds, cols as usize * 12, rows as usize * 24);
+        let data = sixel::encode_sixel(&pixels, _w, _h);
+        use std::io::Write;
+        std::io::stdout().write_all(data.as_bytes())?;
+        std::io::stdout().flush()?;
         return Ok(());
     }
 
