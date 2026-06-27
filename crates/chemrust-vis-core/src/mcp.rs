@@ -176,7 +176,7 @@ impl McpServer {
         let zoom = args["zoom"].as_f64().unwrap_or(1.0);
 
         let camera = Camera::with_angles(Point3::new(tx, ty, tz), radius, theta, phi);
-        let mut viewport = Viewport::new(cols as f64 * 2.0, rows as f64 * 4.0);
+        let mut viewport = Viewport::new(cols as f64 * 2.0, rows as f64 * 2.0);
         viewport.pan_x = pan_x;
         viewport.pan_y = pan_y;
         viewport.zoom = zoom;
@@ -340,14 +340,16 @@ impl McpServer {
     }
 }
 
-/// Render DrawCommands to a plain text grid using Braille dot characters.
+/// Render DrawCommands to a plain text grid using half-block characters (▀▄█).
 fn render_commands_to_grid(cmds: &DrawCommands, cols: usize, rows: usize) -> String {
-    let mut chars = vec![vec![0x2800u32; cols]; rows];
+    // Half-block: 2 vertical sub-pixels per char. top=bit0, bot=bit1
+    let mut top = vec![vec![false; cols]; rows];
+    let mut bot = vec![vec![false; cols]; rows];
     let dot_w = cols as f64 * 2.0;
-    let dot_h = rows as f64 * 4.0;
+    let dot_h = rows as f64 * 2.0;
 
     for line in &cmds.lines {
-        draw_line_braille(&mut chars, cols, rows, line.x1, line.y1, line.x2, line.y2);
+        draw_line_half(&mut top, &mut bot, cols, rows, line.x1, line.y1, line.x2, line.y2);
     }
     for pt in &cmds.points {
         if pt.x < -pt.radius || pt.x > dot_w + pt.radius || pt.y < -pt.radius || pt.y > dot_h + pt.radius {
@@ -357,7 +359,7 @@ fn render_commands_to_grid(cmds: &DrawCommands, cols: usize, rows: usize) -> Str
         for dy in -r..=r {
             for dx in -r..=r {
                 if (dx as f64).powi(2) + (dy as f64).powi(2) <= pt.radius.powi(2) {
-                    set_braille_dot(&mut chars, cols, rows, pt.x + dx as f64, pt.y + dy as f64);
+                    set_half_dot(&mut top, &mut bot, cols, rows, pt.x + dx as f64, pt.y + dy as f64);
                 }
             }
         }
@@ -365,32 +367,35 @@ fn render_commands_to_grid(cmds: &DrawCommands, cols: usize, rows: usize) -> Str
     let mut out = String::with_capacity((cols + 1) * rows);
     for row in 0..rows {
         for col in 0..cols {
-            out.push(char::from_u32(chars[row][col]).unwrap_or(' '));
+            let ch = match (top[row][col], bot[row][col]) {
+                (true, true) => '█',
+                (true, false) => '▀',
+                (false, true) => '▄',
+                (false, false) => ' ',
+            };
+            out.push(ch);
         }
         out.push('\n');
     }
     out
 }
 
-fn set_braille_dot(chars: &mut [Vec<u32>], cols: usize, rows: usize, x: f64, y: f64) {
+fn set_half_dot(top: &mut [Vec<bool>], bot: &mut [Vec<bool>], cols: usize, rows: usize, x: f64, y: f64) {
     let col = (x / 2.0).floor() as usize;
-    let row = (y / 4.0).floor() as usize;
+    let row = (y / 2.0).floor() as usize;
     if col < cols && row < rows {
-        let xm = (x as usize) % 2;
-        let ym = (y as usize) % 4;
-        let dot: u32 = if ym < 3 { (xm * 3 + ym) as u32 } else { (xm + 6) as u32 };
-        chars[row][col] |= 1u32 << dot;
+        if (y as usize) % 2 == 0 { top[row][col] = true; } else { bot[row][col] = true; }
     }
 }
 
-fn draw_line_braille(chars: &mut [Vec<u32>], cols: usize, rows: usize, x1: f64, y1: f64, x2: f64, y2: f64) {
+fn draw_line_half(top: &mut [Vec<bool>], bot: &mut [Vec<bool>], cols: usize, rows: usize, x1: f64, y1: f64, x2: f64, y2: f64) {
     let (mut x, mut y) = (x1 as i64, y1 as i64);
     let (x2i, y2i) = (x2 as i64, y2 as i64);
     let dx = (x2i - x).abs(); let dy = -(y2i - y).abs();
     let sx = if x < x2i { 1 } else { -1 }; let sy = if y < y2i { 1 } else { -1 };
     let mut err = dx + dy;
     loop {
-        set_braille_dot(chars, cols, rows, x as f64, y as f64);
+        set_half_dot(top, bot, cols, rows, x as f64, y as f64);
         if x == x2i && y == y2i { break; }
         let e2 = 2 * err;
         if e2 >= dy { if x == x2i { break; } err += dy; x += sx; }
