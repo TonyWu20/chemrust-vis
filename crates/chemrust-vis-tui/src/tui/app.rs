@@ -9,12 +9,13 @@ use chemrust_vis_core::scene::Scene;
 use chemrust_vis_core::viewport::Viewport;
 use crossterm::event::{self, Event};
 use ratatui::{
-    layout::{Constraint, Direction, Layout},
+    layout::{Constraint, Direction, Layout, Rect},
     Terminal,
 };
 
 use super::input::{self, Action};
 use super::mcp_server::SharedState;
+use super::widgets::axis_indicator::AxisIndicator;
 use super::widgets::scene_view::SceneWidget;
 use super::widgets::status_bar::StatusBar;
 
@@ -127,6 +128,15 @@ impl App {
             .constraints([Constraint::Min(1), Constraint::Length(1)])
             .split(f.area());
         f.render_widget(SceneWidget::new(&draw_cmds), layout[0]);
+
+        // Axis indicator: top-right corner overlay (5×3 chars)
+        let axis_area = Rect {
+            x: area.width.saturating_sub(7),
+            y: 0,
+            width: 7.min(area.width),
+            height: 3.min(area.height),
+        };
+        f.render_widget(AxisIndicator::new(&self.camera), axis_area);
 
         // Status bar
         f.render_widget(

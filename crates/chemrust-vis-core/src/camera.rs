@@ -160,6 +160,21 @@ impl Camera {
         self.phi
     }
 
+    /// Project world-space direction vectors (X, Y, Z axes) to 2D screen-space
+    /// unit vectors. Returns `(x_dir, y_dir, z_dir)` where each is `(dx, dy)`
+    /// in screen coordinates (+X = right, +Y = down for canvas).
+    pub fn axis_directions(&self) -> (([f64; 2], [f64; 2], [f64; 2])) {
+        let pose = self.camera_pose();
+        // pose maps camera→world. Extract rotation: pose * camera_axis = world_axis
+        // World axes in camera space: camera_axis = pose⁻¹ * world_axis
+        // For screen projection: screen_x = camera_x, screen_y = -camera_y (flip Y)
+        let world_to_camera = pose.inverse();
+        let x = world_to_camera * Vector3::new(1.0, 0.0, 0.0);
+        let y = world_to_camera * Vector3::new(0.0, 1.0, 0.0);
+        let z = world_to_camera * Vector3::new(0.0, 0.0, 1.0);
+        ([x.x, -x.y], [y.x, -y.y], [z.x, -z.y])
+    }
+
     /// Orbit the camera by delta angles.
     pub fn orbit(&mut self, d_theta: f64, d_phi: f64) {
         self.theta += d_theta;
