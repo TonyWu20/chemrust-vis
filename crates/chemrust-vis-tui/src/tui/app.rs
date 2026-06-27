@@ -129,12 +129,12 @@ impl App {
             .split(f.area());
         f.render_widget(SceneWidget::new(&draw_cmds), layout[0]);
 
-        // Axis indicator: top-right corner overlay (5×3 chars)
+        // Axis indicator: bottom-left corner of scene area, 10×6 chars
         let axis_area = Rect {
-            x: area.width.saturating_sub(7),
-            y: 0,
-            width: 7.min(area.width),
-            height: 3.min(area.height),
+            x: 0,
+            y: layout[0].height.saturating_sub(6),
+            width: 10.min(layout[0].width),
+            height: 6.min(layout[0].height),
         };
         f.render_widget(AxisIndicator::new(&self.camera), axis_area);
 
