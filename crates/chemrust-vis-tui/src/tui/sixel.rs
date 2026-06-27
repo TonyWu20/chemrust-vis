@@ -51,11 +51,43 @@ pub fn render_to_pixels(cmds: &DrawCommands, px_w: usize, px_h: usize) -> (usize
     let height = (px_h / 6) * 6;
     let width = px_w;
     let mut buf = vec![[0u8; 3]; width * height];
+
+    // Find the 2D bounding box of all draw commands
+    let mut min_y = f64::INFINITY;
+    let mut max_y = f64::NEG_INFINITY;
+    let mut min_x = f64::INFINITY;
+    let mut max_x = f64::NEG_INFINITY;
+    for pt in &cmds.points {
+        min_x = min_x.min(pt.x - pt.radius);
+        max_x = max_x.max(pt.x + pt.radius);
+        min_y = min_y.min(pt.y - pt.radius);
+        max_y = max_y.max(pt.y + pt.radius);
+    }
     for line in &cmds.lines {
-        draw_line_px(&mut buf, width, height, line.x1, line.y1, line.x2, line.y2, [160;3]);
+        min_x = min_x.min(line.x1).min(line.x2);
+        max_x = max_x.max(line.x1).max(line.x2);
+        min_y = min_y.min(line.y1).min(line.y2);
+        max_y = max_y.max(line.y1).max(line.y2);
+    }
+    if !min_x.is_finite() { return (width, height, buf); }
+
+    // Center the content: compute offset to center the bounding box in the pixel buffer
+    let content_w = max_x - min_x;
+    let content_h = max_y - min_y;
+    let margin = 0.9; // fill 90% of buffer
+    let scale = ((width as f64 * margin) / content_w).min((height as f64 * margin) / content_h);
+    let off_x = (width as f64 - content_w * scale) / 2.0 - min_x * scale;
+    let off_y = (height as f64 - content_h * scale) / 2.0 - min_y * scale;
+
+    for line in &cmds.lines {
+        draw_line_px(&mut buf, width, height,
+            line.x1 * scale + off_x, line.y1 * scale + off_y,
+            line.x2 * scale + off_x, line.y2 * scale + off_y, [160;3]);
     }
     for pt in &cmds.points {
-        fill_circle_px(&mut buf, width, height, pt.x, pt.y, pt.radius,
+        fill_circle_px(&mut buf, width, height,
+            pt.x * scale + off_x, pt.y * scale + off_y,
+            pt.radius * scale,
             [pt.color.0, pt.color.1, pt.color.2]);
     }
     (width, height, buf)
