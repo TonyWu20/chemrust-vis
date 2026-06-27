@@ -47,7 +47,7 @@ impl Scene {
 
         let atoms = if let Some(cell) = &structure.cell {
             let tensor = cell.tensor();
-            let boundary_margin: f64 = 0.15;
+            let boundary_margin: f64 = 0.01;
 
             let mut atoms = Vec::new();
 
