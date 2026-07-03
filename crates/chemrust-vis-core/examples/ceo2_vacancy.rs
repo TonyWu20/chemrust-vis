@@ -93,8 +93,9 @@ fn main() {
         [true, true, true], vec![0; n_sc], vec![None; n_sc], None,
     );
 
-    // Create an O vacancy: remove one O atom
+    // Create an O vacancy: remove one O atom, track its position
     let o_idx = structure.species.iter().position(|s| *s == ElementSymbol::O).unwrap();
+    let vac_frac = structure.frac_coords[o_idx]; // save frac coords of the removed O
     println!("Before vacancy: {} atoms ({} Ce, {} O)",
         structure.num_atoms(),
         structure.species.iter().filter(|s| **s == ElementSymbol::Ce).count(),
@@ -109,11 +110,51 @@ fn main() {
         structure.species.iter().filter(|s| **s == ElementSymbol::O).count(),
     );
 
+    // Find 4 nearest Ce atoms to the vacancy (adjacent in fluorite)
+    let cell_tensor = structure.cell.as_ref().unwrap().tensor();
+    let vac_cart = cell_tensor * vac_frac.0;
+    let vac_pos = [vac_cart.x, vac_cart.y, vac_cart.z];
+    let spin_ce = nearest_ce_atoms(&structure, vac_pos, 4, cell_tensor);
+
     // Export as .cell file
-    let cell_text = structure_to_cell(&structure);
+    let cell_text = structure_to_cell(&structure, &spin_ce);
     let path = "CeO2_vacancy.cell";
     fs::write(path, &cell_text).unwrap();
     println!("Written to {}", path);
+    println!("Spin assigned to Ce atoms at indices: {:?}", spin_ce);
+}
+
+/// Find the `n` nearest Ce atoms to a position (accounting for periodic boundaries).
+fn nearest_ce_atoms(
+    s: &Structure,
+    pos: [f64; 3],
+    n: usize,
+    cell: &nalgebra::Matrix3<f64>,
+) -> Vec<usize> {
+    let mut dists: Vec<(usize, f64)> = s
+        .species
+        .iter()
+        .enumerate()
+        .filter(|(_, sp)| **sp == ElementSymbol::Ce)
+        .map(|(i, _)| {
+            let fc = s.frac_coords[i];
+            let cart = cell * fc.0;
+            // Minimum-image distance (periodic)
+            let mut dx = (cart.x - pos[0]) / cell[(0, 0)];
+            let mut dy = (cart.y - pos[1]) / cell[(1, 1)];
+            let mut dz = (cart.z - pos[2]) / cell[(2, 2)];
+            dx -= dx.round();
+            dy -= dy.round();
+            dz -= dz.round();
+            let d = (dx * cell[(0, 0)]).powi(2)
+                + (dy * cell[(1, 1)]).powi(2)
+                + (dz * cell[(2, 2)]).powi(2);
+            (i, d.sqrt())
+        })
+        .collect();
+    dists.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+    dists.truncate(n);
+    dists.into_iter().map(|(i, _)| i).collect()
 }
 
 fn remove_atom(mut s: Structure, idx: usize) -> Structure {
@@ -124,7 +165,7 @@ fn remove_atom(mut s: Structure, idx: usize) -> Structure {
     s
 }
 
-fn structure_to_cell(s: &Structure) -> String {
+fn structure_to_cell(s: &Structure, spin_indices: &[usize]) -> String {
     let cell = s.cell.as_ref().unwrap();
     let t = cell.tensor();
     let mut out = String::new();
@@ -136,12 +177,13 @@ fn structure_to_cell(s: &Structure) -> String {
     }
     out.push_str("%ENDBLOCK LATTICE_CART\n\n");
 
-    // Positions
+    // Positions — add SPIN=1.0 for vacancy-adjacent Ce atoms
     out.push_str("%BLOCK POSITIONS_FRAC\n");
     for (i, fc) in s.frac_coords.iter().enumerate() {
-        out.push_str(&format!("  {:2}  {:18.14} {:18.14} {:18.14}\n",
+        let spin_tag = if spin_indices.contains(&i) { " SPIN=1.000000" } else { "" };
+        out.push_str(&format!("  {:2}  {:18.14} {:18.14} {:18.14}{}\n",
             format!("{:?}", s.species[i]),
-            fc.0.x, fc.0.y, fc.0.z));
+            fc.0.x, fc.0.y, fc.0.z, spin_tag));
     }
     out.push_str("%ENDBLOCK POSITIONS_FRAC\n\n");
 
