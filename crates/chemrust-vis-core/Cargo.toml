@@ -20,6 +20,8 @@ castep-cell-io = { version = "0.6.1", optional = true }
 [dev-dependencies]
 proptest = "1"
 castep-periodic-table = "0.5"
+castep-cell-fmt = "0.2.1"
+castep-cell-io = "0.6.1"
 
 [features]
 default = []
