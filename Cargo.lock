@@ -184,7 +184,9 @@ dependencies = [
 
 [[package]]
 name = "castep-cell-fmt"
-version = "0.2.0"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d1ce5236a990a57939c5f5590cf5c3dfc9714222f745e537e2675bec8cf4aafe"
 dependencies = [
  "anyhow",
  "ariadne",
@@ -194,7 +196,9 @@ dependencies = [
 
 [[package]]
 name = "castep-cell-io"
-version = "0.6.0"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b654725fbd7950007c98de1378e25be26aedf7a454ea7691920aed571688549d"
 dependencies = [
  "bon",
  "castep-cell-fmt",
@@ -242,6 +246,7 @@ version = "0.1.0"
 dependencies = [
  "castep-cell-fmt",
  "castep-cell-io",
+ "castep-periodic-table",
  "chemrust-geometry",
  "nalgebra",
  "proptest",
@@ -258,6 +263,7 @@ dependencies = [
  "clap",
  "crossterm",
  "ratatui",
+ "serde_json",
 ]
 
 [[package]]
@@ -443,7 +449,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -589,7 +595,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi",
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -747,9 +753,9 @@ dependencies = [
 
 [[package]]
 name = "num-bigint"
-version = "0.4.6"
+version = "0.4.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a5e44f723f1133c9deac646763579fdb3ac745e418f2a7af9cd0c431da1f20b9"
+checksum = "c863e9ab5e7bf9c99ba75e1050f1e4d624ae87ed3532d6238ffbdc7b585dbbe6"
 dependencies = [
  "num-integer",
  "num-traits",
@@ -1099,7 +1105,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1321,7 +1327,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

@@ -4,6 +4,7 @@
 //! and (feature-gated) CASTEP `.cell` file loading.
 
 pub mod camera;
+pub mod fixture;
 pub mod scene;
 pub mod viewport;
 pub mod mcp;

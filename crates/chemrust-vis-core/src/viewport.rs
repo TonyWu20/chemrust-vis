@@ -180,8 +180,8 @@ impl Viewport {
 mod tests {
     use super::*;
     use crate::camera::Camera;
+    use crate::fixture::cu111_co_system;
     use crate::scene::Scene;
-    use chemrust_geometry::slab::cu111_co_system;
     use nalgebra::Point3;
 
     #[test]

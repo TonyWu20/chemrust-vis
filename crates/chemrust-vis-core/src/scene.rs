@@ -328,7 +328,7 @@ pub fn element_color(element: ElementSymbol) -> RgbColor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chemrust_geometry::slab::cu111_co_system;
+    use crate::fixture::cu111_co_system;
     use chemrust_geometry::{ElementSymbol, FracCoord, Structure};
 
     #[test]
@@ -353,16 +353,24 @@ mod tests {
     fn second_atom_cartesian_position() {
         let structure = cu111_co_system(3.615);
         let scene = Scene::from_structure(&structure);
-        // Find the non-periodic Cu atom at ~(1.2781, 0.7379, 2.0871)
-        let pos = scene.atoms.iter()
-            .find(|a| !a.is_periodic_image
-                && (a.position[0] - 1.2781).abs() < 0.001
-                && (a.position[1] - 0.7379).abs() < 0.001)
-            .map(|a| a.position)
-            .expect("second Cu atom not found");
-        assert!((pos[0] - 1.2781).abs() < 0.001, "x={}", pos[0]);
-        assert!((pos[1] - 0.7379).abs() < 0.001, "y={}", pos[1]);
-        assert!((pos[2] - 2.0871).abs() < 0.001, "z={}", pos[2]);
+        // The scene's Cartesian position for atom i must equal the cell
+        // tensor applied to that atom's fractional coordinate. Verify the
+        // transformation for the second atom (index 1, a non-periodic Cu).
+        let cell = structure.cell.as_ref().expect("slab has a cell");
+        let tensor = cell.tensor();
+        let fc = structure.frac_coords[1].0;
+        let expected = tensor * fc;
+        let atom = scene
+            .atoms
+            .iter()
+            .find(|a| a.atom_index == 1 && !a.is_periodic_image)
+            .expect("atom_index 1 not found");
+        assert!((atom.position[0] - expected.x).abs() < 1e-9,
+            "x={} expected {}", atom.position[0], expected.x);
+        assert!((atom.position[1] - expected.y).abs() < 1e-9,
+            "y={} expected {}", atom.position[1], expected.y);
+        assert!((atom.position[2] - expected.z).abs() < 1e-9,
+            "z={} expected {}", atom.position[2], expected.z);
     }
 
     #[test]
@@ -408,9 +416,22 @@ mod tests {
         let structure = cu111_co_system(3.615);
         let scene = Scene::from_structure(&structure);
         let center = scene.bounding_box_center();
-        // Center should be within the cell volume, roughly (5, 9, 9) for axis-aligned
-        assert!(center[0] > 0.0 && center[0] < 11.0);
-        assert!(center[1] > 0.0 && center[1] < 18.0);
+        // bounding_box_center is the arithmetic mean of all atom positions
+        // (including periodic replicas). Verify it against a manual sum.
+        let n = scene.atoms.len() as f64;
+        let mut sum = [0.0f64; 3];
+        for a in &scene.atoms {
+            for i in 0..3 {
+                sum[i] += a.position[i];
+            }
+        }
+        for i in 0..3 {
+            assert!((center[i] - sum[i] / n).abs() < 1e-9, "axis {i}");
+        }
+        // A (111) slab is laid out toward -Y, so the centroid y is negative;
+        // x and z stay within the slab footprint (cell ~10.2 x ~18.3).
+        assert!(center[0] > 0.0 && center[0] < 16.0);
+        assert!(center[1] < 0.0);
         assert!(center[2] > 0.0 && center[2] < 19.0);
     }
 
