@@ -3,7 +3,8 @@
 //!
 //! Spherical coordinates:
 //! - theta: azimuthal angle in XY plane (0 = +X, π/2 = +Y)
-//! - phi: polar angle from Z axis (0 = +Z, π/2 = XY plane)
+//! - phi: polar angle from Z axis (0 = +Z, π/2 = XY plane, π = −Z).
+//!   Wraps at 2π during orbit; the position formula is periodic.
 
 use nalgebra::{Isometry3, Point3, Vector3};
 
@@ -60,19 +61,28 @@ impl Camera {
 
     /// Choose an up vector for look_at_rh, avoiding gimbal lock.
     ///
-    /// When the view direction is nearly parallel to (0,0,1), the default
-    /// up vector would cause a degenerate cross product.
+    /// World +Z is the screen up wherever it is not nearly parallel to
+    /// the view direction. In the narrow band near a pole (where +Z is
+    /// unusable), the up blends smoothly toward the horizontal outward
+    /// direction `(-sin theta, cos theta, 0)`. That direction matches
+    /// `orbit`'s pole reflection, so a view that rolls through a pole
+    /// reorients the way a real orbit does instead of snapping 90
+    /// degrees mid-orbit.
     fn compute_up(&self) -> Vector3<f64> {
         let pos = self.position();
         let dir = (self.target - pos).normalize();
         let z_axis = Vector3::new(0.0, 0.0, 1.0);
-        // If view direction is nearly parallel to ±Z, use -Y as up.
-        // |dir · z_axis| ≈ 1 means nearly parallel.
-        if dir.dot(&z_axis).abs() > 0.9999 {
-            Vector3::new(0.0, -1.0, 0.0)
-        } else {
-            Vector3::new(0.0, 0.0, 1.0)
+        // |dir · z| = |cos phi|: 1 at the poles, 0 at the equator.
+        let c = dir.dot(&z_axis).abs();
+        const BAND_FAR: f64 = 0.995; // 1.82 degrees from a pole
+        const BAND_NEAR: f64 = 0.9999; // 0.81 degrees from a pole
+        if c <= BAND_FAR {
+            return z_axis;
         }
+        let t = ((c - BAND_FAR) / (BAND_NEAR - BAND_FAR)).min(1.0);
+        let s = t * t * (3.0 - 2.0 * t); // smoothstep in the band
+        let outward = Vector3::new(-self.theta.sin(), self.theta.cos(), 0.0);
+        (z_axis * (1.0 - s) + outward * s).normalize()
     }
 
     /// Compute the view matrix (world → camera space).
@@ -163,7 +173,7 @@ impl Camera {
     /// Project world-space direction vectors (X, Y, Z axes) to 2D screen-space
     /// unit vectors. Returns `(x_dir, y_dir, z_dir)` where each is `(dx, dy)`
     /// in screen coordinates (+X = right, +Y = down for canvas).
-    pub fn axis_directions(&self) -> (([f64; 2], [f64; 2], [f64; 2])) {
+    pub fn axis_directions(&self) -> ([f64; 2], [f64; 2], [f64; 2]) {
         let pose = self.camera_pose();
         // pose maps camera→world. Extract rotation: pose * camera_axis = world_axis
         // World axes in camera space: camera_axis = pose⁻¹ * world_axis
@@ -176,10 +186,16 @@ impl Camera {
     }
 
     /// Orbit the camera by delta angles.
+    ///
+    /// Theta is unbounded. Phi wraps at 2π: the position formula
+    /// `sin(φ)cos(θ), sin(φ)sin(θ), cos(φ)` is periodic, so the
+    /// camera orbits freely through both poles. No angle is a dead
+    /// end. The up-vector logic in `compute_up` handles the pole
+    /// region via the view direction.
     pub fn orbit(&mut self, d_theta: f64, d_phi: f64) {
         self.theta += d_theta;
-        self.phi += d_phi;
-        self.phi = self.phi.clamp(0.001, std::f64::consts::PI - 0.001);
+        self.phi = (self.phi + d_phi)
+            .rem_euclid(2.0 * std::f64::consts::PI);
     }
 
     /// Zoom by changing radius. Clamped to minimum 0.1.
@@ -275,5 +291,149 @@ mod tests {
         cam.pan(2.0, 3.0);
         let target_after = cam.target();
         assert!((target_after - target_before).norm() > 1e-6);
+    }
+
+    #[test]
+    fn orbit_wraps_through_top_pole() {
+        // From phi=5deg, theta=0: a -10deg step crosses the top pole.
+        // Phi wraps to 355deg (= 2pi - 5deg). Theta is unchanged.
+        let mut cam = Camera::with_angles(
+            Point3::new(0.0, 0.0, 0.0),
+            10.0,
+            0.0,
+            5.0_f64.to_radians(),
+        );
+        cam.orbit(0.0, -10.0_f64.to_radians());
+        let expected_phi = 2.0 * std::f64::consts::PI - 5.0_f64.to_radians();
+        assert!((cam.phi() - expected_phi).abs() < 1e-12);
+        assert!(cam.theta().abs() < 1e-12, "theta should stay 0");
+        // Position equals P(-5deg, 0): 5deg past the top pole.
+        let pos = cam.position();
+        let s5 = 5.0_f64.to_radians();
+        assert!((pos.x + 10.0 * s5.sin()).abs() < 1e-9, "x={}", pos.x);
+        assert!(pos.y.abs() < 1e-9, "y={}", pos.y);
+        assert!((pos.z - 10.0 * s5.cos()).abs() < 1e-9, "z={}", pos.z);
+    }
+
+    #[test]
+    fn orbit_wraps_through_bottom_pole() {
+        // From phi=175deg, theta=0: a +10deg step crosses the bottom pole.
+        // Phi becomes 185deg. Theta is unchanged.
+        let mut cam = Camera::with_angles(
+            Point3::new(0.0, 0.0, 0.0),
+            10.0,
+            0.0,
+            175.0_f64.to_radians(),
+        );
+        cam.orbit(0.0, 10.0_f64.to_radians());
+        assert!((cam.phi() - 185.0_f64.to_radians()).abs() < 1e-9);
+        assert!(cam.theta().abs() < 1e-12, "theta should stay 0");
+        // Position equals P(185deg, 0): 5deg past the bottom pole.
+        let pos = cam.position();
+        let r185 = 185.0_f64.to_radians();
+        assert!((pos.x - 10.0 * r185.sin()).abs() < 1e-9, "x={}", pos.x);
+        assert!((pos.z - 10.0 * r185.cos()).abs() < 1e-9, "z={}", pos.z);
+    }
+
+    #[test]
+    fn repeated_w_presses_at_bottom_pole_keep_theta_stable() {
+        // Regression: pressing w repeatedly at the bottom pole must not
+        // cycle theta. Phi simply increases past 180deg and wraps at 360deg.
+        let mut cam = Camera::with_angles(
+            Point3::new(0.0, 0.0, 0.0),
+            10.0,
+            0.0,
+            std::f64::consts::PI, // start at bottom pole
+        );
+        for i in 1..=4 {
+            cam.orbit(0.0, 5.0_f64.to_radians());
+            let expected_phi = (std::f64::consts::PI + (i as f64) * 5.0_f64.to_radians())
+                .rem_euclid(2.0 * std::f64::consts::PI);
+            assert!((cam.phi() - expected_phi).abs() < 1e-9, "press {}", i);
+            assert!(cam.theta().abs() < 1e-12,
+                "theta shifted on press {}: {}", i, cam.theta());
+        }
+    }
+
+    #[test]
+    fn orbit_has_no_dead_end_at_the_poles() {
+        // Regression for the "stuck at a specific angle" report. The old
+        // clamp pinned phi at 0.001 rad and pi - 0.001 rad. Further
+        // pushes in the same direction did nothing. Now every step
+        // moves the camera, through both poles.
+        let mut cam =
+            Camera::with_angles(Point3::new(0.0, 0.0, 0.0), 10.0, 0.0, 0.001);
+        let mut prev = cam.position();
+        for _ in 0..4 {
+            cam.orbit(0.0, -5.0_f64.to_radians());
+            let pos = cam.position();
+            assert!((pos - prev).norm() > 1e-6, "pinned at phi={}", cam.phi());
+            prev = pos;
+        }
+        let mut cam = Camera::with_angles(
+            Point3::new(0.0, 0.0, 0.0),
+            10.0,
+            0.0,
+            std::f64::consts::PI - 0.001,
+        );
+        let mut prev = cam.position();
+        for _ in 0..4 {
+            cam.orbit(0.0, 5.0_f64.to_radians());
+            let pos = cam.position();
+            assert!((pos - prev).norm() > 1e-6, "pinned at phi={}", cam.phi());
+            prev = pos;
+        }
+    }
+
+    #[test]
+    fn up_vector_is_world_z_at_equator() {
+        let cam = Camera::with_angles(
+            Point3::new(0.0, 0.0, 0.0),
+            10.0,
+            0.7,
+            std::f64::consts::FRAC_PI_4,
+        );
+        let up = cam.compute_up();
+        assert!((up - Vector3::new(0.0, 0.0, 1.0)).norm() < 1e-12);
+    }
+
+    #[test]
+    fn up_vector_at_pole_points_outward() {
+        // Exactly at the top pole the up is the horizontal outward
+        // direction for the current theta: theta=0 gives (0, 1, 0),
+        // theta=pi/2 gives (-1, 0, 0).
+        let cam = Camera::with_angles(Point3::new(0.0, 0.0, 0.0), 10.0, 0.0, 0.0);
+        assert!((cam.compute_up() - Vector3::new(0.0, 1.0, 0.0)).norm() < 1e-9);
+        let cam = Camera::with_angles(
+            Point3::new(0.0, 0.0, 0.0),
+            10.0,
+            std::f64::consts::FRAC_PI_2,
+            0.0,
+        );
+        assert!((cam.compute_up() - Vector3::new(-1.0, 0.0, 0.0)).norm() < 1e-9);
+    }
+
+    #[test]
+    fn up_vector_changes_smoothly_through_pole_band() {
+        // No sudden roll outside the pole band: sweep phi from the top
+        // pole to 45 degrees and keep every step within about 2.5
+        // degrees of the previous up vector.
+        let mut prev: Option<Vector3<f64>> = None;
+        let mut phi = 0.001f64;
+        while phi <= std::f64::consts::FRAC_PI_4 {
+            let cam =
+                Camera::with_angles(Point3::new(0.0, 0.0, 0.0), 10.0, 0.0, phi);
+            let up = cam.compute_up();
+            if let Some(p) = prev {
+                assert!(
+                    p.dot(&up) > 0.999,
+                    "up snapped between phi={} and {}",
+                    phi - 0.0005,
+                    phi
+                );
+            }
+            prev = Some(up);
+            phi += 0.0005;
+        }
     }
 }

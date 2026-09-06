@@ -127,7 +127,7 @@ fn tool_get_view(id: &Value, state: &Arc<Mutex<SharedState>>) -> Value {
         "jsonrpc": "2.0", "id": id,
         "result": {"content": [{"type": "text", "text": format!(
             "θ={:.0}° φ={:.0}° r={:.1} | {} atoms | {}×{} chars\n```\n{}```",
-            s.theta.to_degrees(), s.phi.to_degrees(), s.radius,
+            s.theta.to_degrees().rem_euclid(360.0), s.phi.to_degrees().rem_euclid(360.0), s.radius,
             s.scene.atoms.len(),
             (s.vp_width / 2.0) as usize, (s.vp_height / 2.0) as usize,
             grid
@@ -142,7 +142,7 @@ fn tool_get_state(id: &Value, state: &Arc<Mutex<SharedState>>) -> Value {
     json!({
         "jsonrpc": "2.0", "id": id,
         "result": {"content": [{"type": "text", "text": serde_json::to_string_pretty(&json!({
-            "camera": {"theta_deg": s.theta.to_degrees(), "phi_deg": s.phi.to_degrees(), "radius": s.radius},
+            "camera": {"theta_deg": s.theta.to_degrees().rem_euclid(360.0), "phi_deg": s.phi.to_degrees().rem_euclid(360.0), "radius": s.radius},
             "target": s.target,
             "viewport": {"width": s.vp_width, "height": s.vp_height},
             "scene_center": center,

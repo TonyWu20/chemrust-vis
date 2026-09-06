@@ -148,8 +148,8 @@ impl App {
                     .unwrap_or("unknown")
                     .to_string(),
                 atom_count: self.num_atoms,
-                theta_deg: self.camera.theta().to_degrees(),
-                phi_deg: self.camera.phi().to_degrees(),
+                theta_deg: self.camera.theta().to_degrees().rem_euclid(360.0),
+                phi_deg: self.camera.phi().to_degrees().rem_euclid(360.0),
                 radius: self.camera.radius(),
             },
             layout[1],

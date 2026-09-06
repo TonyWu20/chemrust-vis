@@ -91,3 +91,81 @@ pub fn handle_key_event(key: KeyEvent, camera: &mut Camera, viewport: &mut Viewp
         _ => Action::None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn camera() -> Camera {
+        Camera::from_target([0.0; 3], 10.0)
+    }
+
+    /// Regression for the "stuck at a specific angle" report. The old phi
+    /// clamp pinned the camera at 0.057 degrees and 179.94 degrees, and
+    /// further presses in the same direction did nothing. A full sweep
+    /// now rolls through both poles and every keypress moves the camera.
+    #[test]
+    fn w_s_sweeps_through_both_poles_without_pin() {
+        let mut vp = Viewport::new(160.0, 96.0);
+        let mut cam = camera();
+        let mut prev = cam.position();
+        for _ in 0..80 {
+            let action = handle_key_event(key(KeyCode::Char('w')), &mut cam, &mut vp);
+            assert!(matches!(action, Action::Redraw));
+            let pos = cam.position();
+            assert!(
+                (pos - prev).norm() > 1e-6,
+                "w sweep pinned the camera at phi={}",
+                cam.phi()
+            );
+            prev = pos;
+        }
+        let mut cam = camera();
+        let mut prev = cam.position();
+        for _ in 0..80 {
+            handle_key_event(key(KeyCode::Char('s')), &mut cam, &mut vp);
+            let pos = cam.position();
+            assert!(
+                (pos - prev).norm() > 1e-6,
+                "s sweep pinned the camera at phi={}",
+                cam.phi()
+            );
+            prev = pos;
+        }
+    }
+
+    /// Theta has no bound: fine yaw steps move the camera every time.
+    #[test]
+    fn a_d_sweeps_yaw_without_pin() {
+        let mut vp = Viewport::new(160.0, 96.0);
+        let mut cam = camera();
+        let mut prev = cam.position();
+        for _ in 0..40 {
+            handle_key_event(key(KeyCode::Char('a')), &mut cam, &mut vp);
+            let pos = cam.position();
+            assert!(
+                (pos - prev).norm() > 1e-6,
+                "a sweep pinned the camera at theta={}",
+                cam.theta()
+            );
+            prev = pos;
+        }
+        let mut cam = camera();
+        let mut prev = cam.position();
+        for _ in 0..40 {
+            handle_key_event(key(KeyCode::Char('d')), &mut cam, &mut vp);
+            let pos = cam.position();
+            assert!(
+                (pos - prev).norm() > 1e-6,
+                "d sweep pinned the camera at theta={}",
+                cam.theta()
+            );
+            prev = pos;
+        }
+    }
+}
