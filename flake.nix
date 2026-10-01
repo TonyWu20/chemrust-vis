@@ -70,60 +70,14 @@
               pkg-config
               libcxx
               gcc
-            ] ++ lib.optionals stdenv.isDarwin ([
+            ] ++ lib.optionals stdenv.isDarwin [
               pkgs.apple-sdk_26
               pkgs.libiconv
-            ]);
-            env = [
+            ];
+            env = with pkgs;lib.optionals stdenv.isDarwin [
               {
                 name = "RUSTFLAGS";
                 value = "-C link-arg=-L${pkgs.libiconv}/lib";
-              }
-            ];
-            commands = [
-              {
-                name = "claude-qwen3.6-nix";
-                command = ''
-                  ANTHROPIC_BASE_URL=http://127.0.0.1:4000 \
-                  CLAUDE_CODE_ATTRIBUTION_HEADER="0" \
-                  ANTHROPIC_DEFAULT_OPUS_MODEL=qwen3.6-apex-think \
-                  ANTHROPIC_DEFAULT_SONNET_MODEL=qwen3.6-apex-think \
-                  ANTHROPIC_DEFAULT_HAIKU_MODEL=qwen3.6-apex \
-                  claude  --plugin-dir /Users/tony/programming/rust-development-pipeline
-                '';
-              }
-              {
-                name = "claude-deepseek";
-                command = ''
-                  ANTHROPIC_BASE_URL=$DEEPSEEK_BASE_URL \
-                  ANTHROPIC_AUTH_TOKEN=$DEEPSEEK_TOKEN \
-                  CLAUDE_CODE_ATTRIBUTION_HEADER="0" \
-                  ANTHROPIC_DEFAULT_OPUS_MODEL=deepseek-v4-pro[1m] \
-                  ANTHROPIC_DEFAULT_SONNET_MODEL=deepseek-v4-pro[1m] \
-                  ANTHROPIC_DEFAULT_HAIKU_MODEL=deepseek-v4-flash[1m] \
-                  claude --model "opusplan" --plugin-dir /Users/tony/programming/rust-development-pipeline
-                '';
-              }
-              {
-                name = "claude-deepseek-research";
-                command = ''
-                  ANTHROPIC_BASE_URL=$DEEPSEEK_BASE_URL \
-                  ANTHROPIC_AUTH_TOKEN=$DEEPSEEK_TOKEN \
-                  CLAUDE_CODE_ATTRIBUTION_HEADER="0" \
-                  CLAUDE_CODE_EFFORT_LEVEL=max \
-                  ANTHROPIC_DEFAULT_OPUS_MODEL=deepseek-v4-pro[1m] \
-                  ANTHROPIC_DEFAULT_SONNET_MODEL=deepseek-v4-flash[1m] \
-                  ANTHROPIC_DEFAULT_HAIKU_MODEL=deepseek-v4-flash \
-                  claude --model "opusplan"
-                '';
-              }
-              {
-                name = "claude-fox";
-                command = ''
-                  ANTHROPIC_BASE_URL=https://code.newcli.com/claude/super \
-                  ANTHROPIC_AUTH_TOKEN=$FOXCODE_TOKEN \
-                  claude --plugin-dir /Users/tony/programming/rust-development-pipeline
-                '';
               }
             ];
           };

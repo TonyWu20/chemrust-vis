@@ -24,6 +24,9 @@ target
 # Nix / direnv local dev environment
 .direnv/
 .envrc
+# Nix devshell build artifact (symlink into /nix/store)
+result
 
 # Example output artifact (ceO2_vacancy example writes this to CWD)
 CeO2_vacancy.cell
+sessions
