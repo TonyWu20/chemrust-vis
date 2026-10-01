@@ -131,3 +131,19 @@ All terms used match the CONTEXT.md glossary. No refinements needed.
 - **Projection** — as defined in CONTEXT.md §2.2, orthographic only for Phase 1
 - **RgbColor** — new term: `RgbColor(u8, u8, u8)` in lib crate; distinct from `ratatui::style::Color`. Defined in CONTEXT.md §2.2 implicitly as part of AtomDrawData color assignment.
 - **Z-up convention** — new term: coordinate system where +Z is "up" (c-axis direction). Theta = azimuthal (XY plane), phi = polar (from Z). Added to CONTEXT.md §2.3 as a spatial convention.
+
+## Mouse Nav Commit Scope (feat/phase-1 to main)
+
+Session decision on what goes into the mouse navigation PR:
+
+- Include: the Rust mouse feature (mouse_nav.rs, lib.rs, app.rs,
+  input.rs).
+- Include: the feature request note in notes/feature-requests/.
+- Include: the flake change (flake.nix). It drops the machine-local
+  claude-* devshell commands and gates the default shell env for
+  Darwin. flake.lock is unchanged.
+- Drop: the Lean 4 reference spec. The user dropped the Lean approach
+  after trying it. lean/ stays local and untracked. The Rust docs no
+  longer reference the spec, and flake.nix has no lean devshell.
+- Ignore: the top-level result symlink. It points into /nix/store.
+  It is a devshell build artifact, so .gitignore now ignores it.
