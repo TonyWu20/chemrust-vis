@@ -19,3 +19,14 @@ target
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
+.claude/
+
+# Nix / direnv local dev environment
+.direnv/
+.envrc
+# Nix devshell build artifact (symlink into /nix/store)
+result
+
+# Example output artifact (ceO2_vacancy example writes this to CWD)
+CeO2_vacancy.cell
+sessions

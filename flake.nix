@@ -1,0 +1,87 @@
+{
+  description = "claude code environment";
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    fenix = {
+      url = "github:nix-community/fenix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+    devshell.url = "github:numtide/devshell";
+  };
+  outputs = { nixpkgs, devshell, fenix, ... }:
+    let
+      systems = [ "x86_64-linux" "aarch64-darwin" ];
+
+      # Pin claude-code to a specific version from GitHub ahead of nixpkgs.
+      # Update the tag here, then rebuild: nix will fail with the correct npmDepsHash.
+      claude-code-rev = "v2.1.193";
+
+      claude-code-overlay = final: prev:
+        let
+          stdenv = final.stdenvNoCC;
+          baseUrl = "https://downloads.claude.ai/claude-code-releases";
+          platformKey = "${stdenv.hostPlatform.node.platform}-${stdenv.hostPlatform.node.arch}";
+        in
+        {
+          claude-code =
+            prev.claude-code.overrideAttrs
+              (old: rec {
+                version = final.lib.removePrefix "v" claude-code-rev;
+                src = final.fetchurl {
+                  url = "${baseUrl}/${version}/${platformKey}/claude";
+                  sha256 = "sha256-91E6MDha2QGcI3Im/W7EZQizBi6+/Kiu2+OX0RGoGP8=";
+                };
+              });
+        };
+
+      pkgsFor = system: import nixpkgs {
+        config.allowUnfree = true;
+        inherit system; overlays = [
+        devshell.overlays.default
+        fenix.overlays.default
+        claude-code-overlay
+      ];
+      };
+      forAllSystems = nixpkgs.lib.genAttrs systems;
+    in
+    {
+      devShells = forAllSystems (
+        system:
+        let
+          pkgs = pkgsFor system;
+          rustPackages = (fenix.packages.${system}.stable.withComponents [
+            "cargo"
+            "clippy"
+            "rust-src"
+            "rustc"
+            "rustfmt"
+            "rust-analyzer"
+          ]);
+        in
+        {
+          default = pkgs.devshell.mkShell {
+            packages = with pkgs; [
+              rustPackages
+              fish
+              uv
+              claude-code
+              fortls
+              mdfried
+              pkg-config
+              libcxx
+              gcc
+            ] ++ lib.optionals stdenv.isDarwin [
+              pkgs.apple-sdk_26
+              pkgs.libiconv
+            ];
+            env = with pkgs;lib.optionals stdenv.isDarwin [
+              {
+                name = "RUSTFLAGS";
+                value = "-C link-arg=-L${pkgs.libiconv}/lib";
+              }
+            ];
+          };
+        }
+      );
+    };
+}
