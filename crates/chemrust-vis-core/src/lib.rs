@@ -5,6 +5,7 @@
 
 pub mod camera;
 pub mod fixture;
+pub mod mouse_nav;
 pub mod scene;
 pub mod viewport;
 pub mod mcp;

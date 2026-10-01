@@ -13,7 +13,7 @@ use ratatui::{
     Terminal,
 };
 
-use super::input::{self, Action};
+use super::input::{self, Action, MouseState};
 use super::mcp_server::SharedState;
 use super::widgets::axis_indicator::AxisIndicator;
 use super::widgets::scene_view::SceneWidget;
@@ -34,6 +34,8 @@ pub struct App {
     running: bool,
     /// Shared state for the background MCP server.
     mcp_state: Option<Arc<Mutex<SharedState>>>,
+    /// Mouse gesture state for drag classification.
+    mouse_state: MouseState,
 }
 
 impl App {
@@ -63,6 +65,7 @@ impl App {
             num_atoms,
             running: true,
             mcp_state: None,
+            mouse_state: MouseState::default(),
         }
     }
 
@@ -97,6 +100,15 @@ impl App {
                 Event::Resize(cols, rows) => {
                     // Block rendering: 2 dots per column, 2 dots per row
                     self.viewport = Viewport::new(cols as f64 * 2.0, rows as f64 * 2.0);
+                }
+                Event::Mouse(mouse) => {
+                    let action =
+                        input::handle_mouse_event(&mouse, &mut self.camera, &self.viewport, &mut self.mouse_state);
+                    if action == Action::Reset {
+                        self.camera =
+                            Camera::from_target(self.initial_target, self.initial_radius);
+                        self.viewport.reset();
+                    }
                 }
                 _ => {}
             }

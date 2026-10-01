@@ -1,8 +1,11 @@
-//! Keyboard input handling: maps key events to camera and viewport actions.
+//! Keyboard and mouse input handling: maps key and mouse events to camera
+//! and viewport actions.
 
 use chemrust_vis_core::camera::Camera;
 use chemrust_vis_core::viewport::Viewport;
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{
+    KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 
 /// Actions the app can take in response to input.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -14,7 +17,11 @@ pub enum Action {
 }
 
 /// Map a key event to camera/viewport mutations. Returns the action to take.
-pub fn handle_key_event(key: KeyEvent, camera: &mut Camera, viewport: &mut Viewport) -> Action {
+pub fn handle_key_event(
+    key: KeyEvent,
+    camera: &mut Camera,
+    viewport: &mut Viewport,
+) -> Action {
     // Only process key press events (not releases or repeats).
     if key.kind != KeyEventKind::Press {
         return Action::None;
@@ -88,6 +95,110 @@ pub fn handle_key_event(key: KeyEvent, camera: &mut Camera, viewport: &mut Viewp
             Action::Redraw
         }
 
+        _ => Action::None,
+    }
+}
+
+// ── Mouse state and handler ───────────────────────────────────────────────────
+
+/// State needed to classify mouse press/move/release gestures.
+#[derive(Debug, Clone, Default)]
+pub struct MouseState {
+    /// The left button is currently pressed.
+    pub left_down: bool,
+    /// Dot-unit position where the left button was pressed.
+    pub press_x: f64,
+    pub press_y: f64,
+    /// Last known mouse position in dot units (col*2, row*2).
+    pub last_x: f64,
+    pub last_y: f64,
+}
+
+/// Map a crossterm mouse event to camera mutations.
+///
+/// - Plain left-drag: orbit the camera (Ctrl for 10× snipe).
+/// - Alt+left-drag: pan the target ("push the paper").
+/// - Scroll up: zoom in. Scroll down: zoom out.
+/// - Click (press→release below the threshold): atom pick (no-op for now).
+///
+/// Coordinates arrive in terminal cells; we convert to dot units (×2)
+/// to match the viewport. The sensitivity functions in
+/// `chemrust_vis_core::mouse_nav` implement the mouse-nav sensitivity model.
+pub fn handle_mouse_event(
+    mouse: &MouseEvent,
+    camera: &mut Camera,
+    viewport: &Viewport,
+    state: &mut MouseState,
+) -> Action {
+    match mouse.kind {
+        MouseEventKind::Down(MouseButton::Left) => {
+            state.left_down = true;
+            let x = mouse.column as f64 * 2.0;
+            let y = mouse.row as f64 * 2.0;
+            state.press_x = x;
+            state.press_y = y;
+            state.last_x = x;
+            state.last_y = y;
+            Action::None
+        }
+        MouseEventKind::Drag(MouseButton::Left) => {
+            if !state.left_down {
+                return Action::None;
+            }
+            let x = mouse.column as f64 * 2.0;
+            let y = mouse.row as f64 * 2.0;
+            let dx = x - state.last_x;
+            let dy = y - state.last_y;
+            if dx != 0.0 || dy != 0.0 {
+                let radius = camera.radius();
+                let vp_h = viewport.height;
+                let ctrl = mouse.modifiers.contains(KeyModifiers::CONTROL);
+                let alt = mouse.modifiers.contains(KeyModifiers::ALT);
+                if alt {
+                    let (wx, wy) =
+                        chemrust_vis_core::mouse_nav::alt_drag_pan_deltas(dx, dy, radius, vp_h);
+                    camera.pan(wx, wy);
+                } else {
+                    let (d_theta, d_phi) =
+                        chemrust_vis_core::mouse_nav::orbit_deltas_snipe(
+                            dx, dy, radius, ctrl,
+                        );
+                    camera.orbit(d_theta, d_phi);
+                }
+                state.last_x = x;
+                state.last_y = y;
+            }
+            Action::Redraw
+        }
+        MouseEventKind::Up(MouseButton::Left) => {
+            state.left_down = false;
+            let x = mouse.column as f64 * 2.0;
+            let y = mouse.row as f64 * 2.0;
+            let total_dx = x - state.press_x;
+            let total_dy = y - state.press_y;
+            let is_click = chemrust_vis_core::mouse_nav::is_click(
+                total_dx,
+                total_dy,
+                chemrust_vis_core::mouse_nav::CLICK_THRESHOLD,
+            );
+            if is_click {
+                // TODO: ray-cast atom pick at (x, y) when selection is
+                // implemented.
+            }
+            Action::None
+        }
+        MouseEventKind::ScrollUp => {
+            let dr =
+                chemrust_vis_core::mouse_nav::zoom_delta(-1.0, camera.radius());
+            camera.zoom(dr);
+            Action::Redraw
+        }
+        MouseEventKind::ScrollDown => {
+            let dr =
+                chemrust_vis_core::mouse_nav::zoom_delta(1.0, camera.radius());
+            camera.zoom(dr);
+            Action::Redraw
+        }
         _ => Action::None,
     }
 }
