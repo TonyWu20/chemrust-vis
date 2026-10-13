@@ -182,9 +182,9 @@ dependencies = [
 
 [[package]]
 name = "castep-cell-fmt"
-version = "0.2.1"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d1ce5236a990a57939c5f5590cf5c3dfc9714222f745e537e2675bec8cf4aafe"
+checksum = "9ec5290cd2c03a3d0ce0ff7d1c6e0ee1947220d1dc883c5aa7497c904454c677"
 dependencies = [
  "anyhow",
  "ariadne",
@@ -194,9 +194,9 @@ dependencies = [
 
 [[package]]
 name = "castep-cell-io"
-version = "0.6.1"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b654725fbd7950007c98de1378e25be26aedf7a454ea7691920aed571688549d"
+checksum = "ce24d47ec5f9e306bd586673e015bbf47852d31dfa988d9309431e88be7fb0c3"
 dependencies = [
  "bon",
  "castep-cell-fmt",
@@ -497,7 +497,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -643,7 +643,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi",
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1164,7 +1164,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1397,7 +1397,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
