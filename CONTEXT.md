@@ -209,11 +209,13 @@ switch to a versioned dependency.
   See the "Accepted limits" section of ADR-0002.
 
 - **One-shot `--sixel`** — Sixel only renders on terminals that implement
-  it: xterm, foot, and iTerm2 (tmux via pass-through). kitty, WezTerm,
+  it: xterm, foot, iTerm2, and WezTerm (tmux via pass-through). kitty
   and Ghostty do not implement sixel, so sixel data is silently ignored
   there. Since 2026-10-14, `--sixel` warns when the terminal does not
-  appear to support sixel, and suggests `--kitty` when the terminal
-  supports the kitty protocol.
+  appear to support sixel. Sixel has no size fields: the terminal maps
+  image pixels to cells at its font size. `--sixel` asks the terminal
+  for its pixel size (xterm `CSI 8 t` extension) and falls back to
+  12x24 px per cell. `--sixel-px <W>x<H>` forces it.
 
 ---
 

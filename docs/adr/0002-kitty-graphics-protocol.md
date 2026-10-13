@@ -102,11 +102,13 @@ Support the kitty graphics protocol as an **optional** scene renderer.
 
 ### Sixel interactive rendering
 
-Sixel works in xterm, foot, and iTerm2, and tmux can pass it through.
-It is not the chosen path because tmux pass-through is inconsistent and
-the sixel encoding (6-pixel subbands, palette limits) gives less control
-than the kitty protocol for shaded spheres. The one-shot `--sixel`
-preview path remains.
+Sixel works in xterm, foot, iTerm2, and WezTerm, and tmux can pass it
+through. It is not the chosen path for interactive rendering because
+tmux pass-through is inconsistent and the sixel encoding (6-pixel
+subbands, palette limits) gives less control than the kitty protocol
+for shaded spheres. The one-shot `--sixel` preview path remains, and
+since 2026-10-14 it sizes its buffer from the terminal's real pixel
+size (xterm `CSI 8 t` query, `--sixel-px` override, 12x24 fallback).
 
 ### `ratatui-image` crate
 
@@ -140,6 +142,36 @@ stdin on all exit paths. The decisions in this ADR are unchanged;
 this section records the amendment so unsuppressed responses are not
 re-introduced.
 
+## Amendment (2026-10-14, second)
+
+The `--sixel` one-shot render in WezTerm showed every atom in green and
+at half the expected size. Both defects were in `sixel.rs`:
+
+- **Green atoms.** The encoder defined palette colors with color system
+  2 and 0-255 byte components, and never sent a color select.
+  WezTerm's sixel decoder parses `#` color definitions as 0-100
+  percent, and in 1-bit mode the defined color is not the foreground
+  until a `#<n>` select is sent. Its default foreground is pure green,
+  which is what every lit pixel showed. The encoder now defines colors
+  with system 0 and 0-100 percent components, and each definition is
+  immediately followed by a select. It also assigns the column color
+  only from on pixels (the old code took the last pixel of the column,
+  which is dark for a thin circle edge).
+- **Half size.** Sixel has no size fields: the terminal maps image
+  pixels to cells at its own font cell size. The one-shot rendered at a
+  fixed 12x24 px per cell while WezTerm's cells were larger, so the
+  image covered fewer cells. `--sixel` now queries the terminal for
+  its text-area pixel size via the xterm `CSI 8 t` extension (xterm,
+  iTerm2, and foot answer by default; WezTerm answers when its
+  `resize_reporting` option is on), derives pixels per cell, and
+  falls back to 12x24 when the terminal does not answer.
+  `--sixel-px <W>x<H>` forces the value. The query runs in raw mode
+  and reads stdin non-blocking for at most 300 ms.
+
+The kitty renderer is unchanged: it places the image in a cell
+rectangle, so its 2x4 px-per-cell assumption only affects content
+framing, not placement.
+
 ## Accepted limits
 
 On 2026-10-13 the decider accepted the limits in the "Negative"
@@ -150,5 +182,7 @@ section above:
 - Under tmux, the image shows only when `allow-passthrough` is on and
   the outer terminal supports the protocol. Otherwise the text UI runs
   unchanged.
-- The pixel buffer assumes a 1:2 cell aspect (2x4 px per cell). Terminals
-  with unusual cell aspects show a slight letterbox.
+- The kitty pixel buffer assumes a 1:2 cell aspect (2x4 px per cell).
+  Terminals with unusual cell aspects show a slight letterbox. The
+  `--sixel` one-shot path sizes its buffer from the queried pixel
+  size instead (amendment above).

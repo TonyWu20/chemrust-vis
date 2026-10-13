@@ -260,6 +260,7 @@ dependencies = [
  "chemrust-vis-core",
  "clap",
  "crossterm",
+ "libc",
  "ratatui",
  "serde_json",
 ]
