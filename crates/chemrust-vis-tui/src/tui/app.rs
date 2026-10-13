@@ -1,4 +1,11 @@
 //! TUI application: ratatui event loop, layout, and rendering.
+//!
+//! Two scene renderers exist:
+//! - Half-block characters (universal fallback, all terminals).
+//! - Kitty graphics protocol (pixel-level; kitty, WezTerm, Ghostty).
+//!   The scene is transmitted as a pixel image placed under the text
+//!   layer, and re-transmitted only when the camera, viewport, or
+//!   terminal size changes.
 
 use std::io;
 use std::path::PathBuf;
@@ -13,7 +20,8 @@ use ratatui::{
     Terminal,
 };
 
-use super::input::{self, Action, MouseState};
+use super::input::{self, Action};
+use super::kitty::{self, KittyRenderer};
 use super::mcp_server::SharedState;
 use super::widgets::axis_indicator::AxisIndicator;
 use super::widgets::scene_view::SceneWidget;
@@ -35,7 +43,15 @@ pub struct App {
     /// Shared state for the background MCP server.
     mcp_state: Option<Arc<Mutex<SharedState>>>,
     /// Mouse gesture state for drag classification.
-    mouse_state: MouseState,
+    mouse_state: input::MouseState,
+    /// Pixel renderer for the scene area. `None` = half-block chars.
+    kitty: Option<KittyRenderer>,
+    /// True when the kitty image data must be re-sent: the camera,
+    /// viewport, or terminal size changed since the last transmit.
+    kitty_dirty: bool,
+    /// Placement size (cols, scene_rows) of the last transmitted image.
+    /// (0, 0) means no image was sent yet.
+    kitty_placement: (u16, u16),
 }
 
 impl App {
@@ -65,7 +81,10 @@ impl App {
             num_atoms,
             running: true,
             mcp_state: None,
-            mouse_state: MouseState::default(),
+            mouse_state: input::MouseState::default(),
+            kitty: None,
+            kitty_dirty: false,
+            kitty_placement: (0, 0),
         }
     }
 
@@ -74,49 +93,129 @@ impl App {
         self.mcp_state = Some(state);
     }
 
+    /// Switch the scene area to the kitty pixel renderer.
+    pub fn enable_kitty(&mut self) {
+        self.kitty = Some(KittyRenderer::new());
+        self.kitty_dirty = true;
+    }
+
     /// Run the main event loop.
     pub fn run(
         &mut self,
-        terminal: &mut Terminal<impl ratatui::backend::Backend>,
+        terminal: &mut Terminal<impl ratatui::backend::Backend + io::Write>,
     ) -> io::Result<()> {
         while self.running {
             terminal.draw(|f| {
                 self.draw(f);
             })?;
 
+            self.render_kitty_image(terminal)?;
+
             match event::read()? {
                 Event::Key(key) => {
                     let action = input::handle_key_event(key, &mut self.camera, &mut self.viewport);
                     match action {
                         Action::Quit => self.running = false,
-                        Action::Reset => {
-                            self.camera =
-                                Camera::from_target(self.initial_target, self.initial_radius);
-                            self.viewport.reset();
-                        }
-                        _ => {}
+                        Action::Redraw | Action::Reset => self.mark_kitty_dirty(),
+                        Action::None => {}
                     }
-                }
-                Event::Resize(cols, rows) => {
-                    // Block rendering: 2 dots per column, 2 dots per row
-                    self.viewport = Viewport::new(cols as f64 * 2.0, rows as f64 * 2.0);
-                }
-                Event::Mouse(mouse) => {
-                    let action =
-                        input::handle_mouse_event(&mouse, &mut self.camera, &self.viewport, &mut self.mouse_state);
                     if action == Action::Reset {
                         self.camera =
                             Camera::from_target(self.initial_target, self.initial_radius);
                         self.viewport.reset();
                     }
                 }
+                Event::Resize(cols, rows) => {
+                    // Block rendering: 2 dots per column, 2 dots per row.
+                    // The kitty renderer resizes itself from terminal
+                    // size on the next frame, so it only needs a
+                    // dirty flag.
+                    self.viewport = Viewport::new(cols as f64 * 2.0, rows as f64 * 2.0);
+                    self.mark_kitty_dirty();
+                }
+                Event::Mouse(mouse) => {
+                    let action = input::handle_mouse_event(
+                        &mouse,
+                        &mut self.camera,
+                        &self.viewport,
+                        &mut self.mouse_state,
+                    );
+                    if action == Action::Redraw {
+                        self.mark_kitty_dirty();
+                    }
+                }
+                // The alternate screen (and its images) may be cleared
+                // when the terminal loses focus. Re-send on the next
+                // frame either way.
+                Event::FocusGained | Event::FocusLost => self.mark_kitty_dirty(),
                 _ => {}
             }
+        }
+
+        self.clear_kitty_image(terminal)?;
+        Ok(())
+    }
+
+    /// Mark the kitty image data as stale (camera/viewport changed).
+    fn mark_kitty_dirty(&mut self) {
+        if self.kitty.is_some() {
+            self.kitty_dirty = true;
+        }
+    }
+
+    /// Send a fresh kitty image after the text pass, when needed.
+    ///
+    /// The image covers the scene area (all rows except the status
+    /// bar). The status bar and axis indicator are text written above
+    /// the image (z-index -1), so they stay readable.
+    fn render_kitty_image(
+        &mut self,
+        terminal: &mut Terminal<impl ratatui::backend::Backend + io::Write>,
+    ) -> io::Result<()> {
+        let Some(renderer) = self.kitty.as_ref() else {
+            return Ok(());
+        };
+        let size = terminal.size()?;
+        let cols = size.width;
+        let rows = size.height;
+        let scene_rows = rows.saturating_sub(1);
+        if cols < 8 || scene_rows < 4 {
+            return Ok(());
+        }
+        // Pixel size: 2 px wide x 4 px tall per cell, the 1:2 cell
+        // aspect, so the placement rectangle needs no letterboxing.
+        let px_w = (cols * 2) as usize;
+        let px_h = (scene_rows * 4) as usize;
+        self.viewport.width = px_w as f64;
+        self.viewport.height = px_h as f64;
+        if !self.kitty_dirty && self.kitty_placement == (cols, scene_rows) {
+            return Ok(());
+        }
+        let cmds = self.viewport.render(&self.scene, &self.camera);
+        let seq = renderer.frame(&cmds, px_w, px_h, cols, scene_rows);
+        let backend = terminal.backend_mut();
+        crossterm::execute!(backend, crossterm::cursor::MoveTo(0, 0))?;
+        backend.write_all(&seq)?;
+        std::io::Write::flush(backend)?;
+        self.kitty_dirty = false;
+        self.kitty_placement = (cols, scene_rows);
+        Ok(())
+    }
+
+    /// Delete the placed image before leaving the alternate screen.
+    fn clear_kitty_image(
+        &mut self,
+        terminal: &mut Terminal<impl ratatui::backend::Backend + io::Write>,
+    ) -> io::Result<()> {
+        if self.kitty.is_some() && self.kitty_placement != (0, 0) {
+            let backend = terminal.backend_mut();
+            backend.write_all(&kitty::encode_delete_all())?;
+            std::io::Write::flush(backend)?;
         }
         Ok(())
     }
 
-    /// Draw a single frame.
+    /// Draw a single frame (text layer).
     fn draw(&mut self, f: &mut ratatui::Frame) {
         let area = f.area();
         let scene_rows = if area.height > 1 { area.height - 1 } else { area.height };
@@ -131,17 +230,25 @@ impl App {
             }
         }
 
-        // Half-block: 2×2 dots per character
-        self.viewport.width = area.width as f64 * 2.0;
-        self.viewport.height = scene_rows as f64 * 2.0;
-        let draw_cmds = self.viewport.render(&self.scene, &self.camera);
         let layout = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Min(1), Constraint::Length(1)])
             .split(f.area());
-        f.render_widget(SceneWidget::new(&draw_cmds), layout[0]);
 
-        // Axis indicator: bottom-left corner of scene area, 10×6 chars
+        if self.kitty.is_some() {
+            // Leave the scene area empty. The pixel image is placed
+            // below it after this text pass (render_kitty_image).
+        } else {
+            // Half-block: 2x2 dots per character
+            self.viewport.width = area.width as f64 * 2.0;
+            self.viewport.height = scene_rows as f64 * 2.0;
+            let draw_cmds = self.viewport.render(&self.scene, &self.camera);
+            f.render_widget(SceneWidget::new(&draw_cmds), layout[0]);
+        }
+
+        // Axis indicator: bottom-left corner of scene area, 10x6 chars.
+        // Text with a transparent background: renders above the kitty
+        // image (z-index -1).
         let axis_area = Rect {
             x: 2,
             y: layout[0].height.saturating_sub(8),
@@ -163,6 +270,7 @@ impl App {
                 theta_deg: self.camera.theta().to_degrees().rem_euclid(360.0),
                 phi_deg: self.camera.phi().to_degrees().rem_euclid(360.0),
                 radius: self.camera.radius(),
+                renderer: if self.kitty.is_some() { "kitty" } else { "half-block" },
             },
             layout[1],
         );

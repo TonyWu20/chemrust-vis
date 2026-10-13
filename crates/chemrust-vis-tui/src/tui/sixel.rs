@@ -93,7 +93,7 @@ pub fn render_to_pixels(cmds: &DrawCommands, px_w: usize, px_h: usize) -> (usize
     (width, height, buf)
 }
 
-fn fill_circle_px(buf: &mut [[u8; 3]], w: usize, h: usize, cx: f64, cy: f64, r: f64, base: [u8; 3]) {
+pub(crate) fn fill_circle_px(buf: &mut [[u8; 3]], w: usize, h: usize, cx: f64, cy: f64, r: f64, base: [u8; 3]) {
     let ri = r.ceil() as i64;
     for dy in -ri..=ri {
         let py = cy as i64 + dy;
@@ -121,7 +121,7 @@ fn fill_circle_px(buf: &mut [[u8; 3]], w: usize, h: usize, cx: f64, cy: f64, r: 
     }
 }
 
-fn draw_line_px(buf: &mut [[u8; 3]], w: usize, h: usize, x1: f64, y1: f64, x2: f64, y2: f64, color: [u8; 3]) {
+pub(crate) fn draw_line_px(buf: &mut [[u8; 3]], w: usize, h: usize, x1: f64, y1: f64, x2: f64, y2: f64, color: [u8; 3]) {
     let (mut x, mut y) = (x1 as i64, y1 as i64);
     let (x2i, y2i) = (x2 as i64, y2 as i64);
     let dx = (x2i - x).abs(); let dy = -(y2i - y).abs();
