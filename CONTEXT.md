@@ -97,15 +97,18 @@ chemrust-vis/
     chemrust-vis-tui/     # binary crate
       Cargo.toml
       src/
-        main.rs           # entry point, CLI args (--mcp vs --tui)
+        main.rs           # entry point, CLI args (--mcp, --sixel, --kitty, --renderer)
         tui/              # TUI application
           mod.rs
-          app.rs          # ratatui App trait impl
+          app.rs          # event loop, layout, renderer selection
           input.rs        # keyboard + mouse event handling
+          mcp_server.rs   # background MCP TCP server
+          sixel.rs        # one-shot sixel encoder, shared pixel primitives
+          kitty.rs        # kitty graphics protocol encoder, pixel renderer
           widgets/        # custom ratatui widgets
-            scene_view.rs
+            scene_view.rs # half-block scene widget
             status_bar.rs
-            atom_inspector.rs
+            axis_indicator.rs
 ```
 
 **Boundary rules:**
@@ -147,7 +150,8 @@ switch to a versioned dependency.
 
 ### 3.4 ADR index
 
-- [ADR-0001](./docs/adr/0001-braille-canvas-rendering.md) — Braille-dot canvas widget for 3D rendering in terminal
+- [ADR-0001](./docs/adr/0001-braille-canvas-rendering.md) — Braille-dot canvas widget for 3D rendering in terminal (partially superseded by ADR-0002)
+- [ADR-0002](./docs/adr/0002-kitty-graphics-protocol.md) — Kitty graphics protocol as an optional pixel-level renderer
 
 ---
 
@@ -184,8 +188,22 @@ switch to a versioned dependency.
 ### 4.4 Explicit non-choices
 
 - **NOT `nalgebra` + `glam`** — Rejected dual-math-library approach. Converting between nalgebra and glam types at the boundary adds friction without benefit. nalgebra handles all 3D math needed (projections, ray casting, camera transforms).
-- **NOT `sixel`/`kitty` graphics protocol** — Rejected for portability. Would not work in plain SSH/tmux without protocol forwarding. Chemrust-vis must work in a basic terminal.
 - **NOT `termion`** — crossterm chosen for better maintenance, Windows support (future), and tighter ratatui integration.
+- **NOT interactive `sixel` rendering** — Sixel stays a one-shot preview path (`--sixel`). Interactive sixel was rejected: tmux sixel pass-through is inconsistent, and the half-block renderer already covers basic terminals.
+
+### 4.5 Accepted graphics choices
+
+- **Kitty graphics protocol** — Accepted 2026-10-13, see [ADR-0002](./docs/adr/0002-kitty-graphics-protocol.md).
+  Optional pixel-level scene renderer for terminals that implement the protocol
+  (kitty, WezTerm, Ghostty). `--renderer auto` detects support from the
+  environment (`KITTY_PID`, `TERM_PROGRAM`, `TERM`); `--renderer kitty`
+  forces it; `--renderer halfblock` forces the universal fallback. The
+  image places below the text layer (z-index -1), so the status bar and
+  axis indicator stay readable. Re-transmits only on camera, viewport,
+  or terminal-size change. One-shot `--kitty` prints a single frame.
+  ADR-0001's rejection of the protocol for interactive use is superseded.
+  The decider accepted the known limits of this choice on 2026-10-13.
+  See the "Accepted limits" section of ADR-0002.
 
 ---
 

@@ -111,3 +111,15 @@ than bare wireframe vertices.
 - ratatui Canvas widget: https://docs.rs/ratatui/latest/ratatui/widgets/canvas/index.html
 - Braille Patterns Unicode block: U+2800–U+28FF
 - chemrust-geometry Structure type: `chemrust-geometry/src/structure.rs:10-38`
+
+---
+
+## Supersession note (2026-10-13)
+
+Partially superseded by [ADR-0002](./0002-kitty-graphics-protocol.md).
+ADR-0001's rejection of the kitty/sixel graphics protocol for interactive
+use is reversed: the kitty protocol is now supported as an optional
+pixel-level renderer. The half-block (▀▄) renderer from this ADR remains
+the universal fallback for terminals without protocol support. The
+"Alternatives considered > Sixel / Kitty graphics protocol" section above
+is kept as history.
