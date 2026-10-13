@@ -10,7 +10,7 @@ use chemrust_vis_core::scene::Scene;
 use clap::{Parser, ValueEnum};
 use crossterm::{
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::backend::CrosstermBackend;
 use std::io;
@@ -72,6 +72,68 @@ fn terminal_size() -> (u16, u16) {
     }
 }
 
+/// Best-effort terminal teardown.
+///
+/// Runs once, on the normal exit path or on drop (error or panic).
+/// Restores the cursor, disables raw mode, and - for the interactive
+/// TUI - releases the mouse capture and leaves the alternate screen.
+/// Before leaving raw mode it drains any bytes still queued on stdin,
+/// so the shell does not inherit them. Those bytes can include stray
+/// terminal graphics-protocol responses (see ADR-0002).
+struct TerminalGuard {
+    done: bool,
+    /// Send the kitty delete-all escape (an image may be placed).
+    kitty: bool,
+    /// Leave the alternate screen and release the mouse capture.
+    /// Interactive TUI only; one-shot paths stay on the main screen.
+    alt_screen: bool,
+}
+
+impl TerminalGuard {
+    /// Interactive TUI: alternate screen, mouse capture, raw mode.
+    fn interactive(kitty: bool) -> Self {
+        Self { done: false, kitty, alt_screen: true }
+    }
+
+    /// One-shot render: raw mode only, no alternate screen.
+    fn one_shot(kitty: bool) -> Self {
+        Self { done: false, kitty, alt_screen: false }
+    }
+
+    /// Run the teardown. Idempotent.
+    fn finish(&mut self) {
+        if self.done {
+            return;
+        }
+        self.done = true;
+        let mut stdout = io::stdout();
+        if self.kitty {
+            let _ = std::io::Write::write_all(&mut stdout, &tui::kitty::encode_delete_all());
+            let _ = std::io::Write::flush(&mut stdout);
+        }
+        // Swallow bytes still queued on stdin so the shell does not
+        // inherit them (e.g. stray graphics-protocol responses).
+        while crossterm::event::poll(std::time::Duration::ZERO).unwrap_or(false) {
+            let _ = crossterm::event::read();
+        }
+        let _ = crossterm::execute!(stdout, crossterm::cursor::Show);
+        let _ = crossterm::terminal::disable_raw_mode();
+        if self.alt_screen {
+            let _ = crossterm::execute!(
+                stdout,
+                crossterm::event::DisableMouseCapture,
+                LeaveAlternateScreen,
+            );
+        }
+    }
+}
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        self.finish();
+    }
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
@@ -108,11 +170,13 @@ fn main() -> Result<()> {
         write!(stdout, "\x1b[2J\x1b[H")?; // clear screen, home cursor
         stdout.write_all(data.as_bytes())?;
         stdout.flush()?;
-        // Use raw mode for key read
+        // Use raw mode for key read; the guard restores it on every
+        // exit path (error included).
         enable_raw_mode()?;
+        let mut guard = TerminalGuard::one_shot(false);
         eprint!("\r\nPress any key to exit...");
         let _ = crossterm::event::read();
-        disable_raw_mode()?;
+        guard.finish();
         execute!(std::io::stdout(), crossterm::terminal::Clear(crossterm::terminal::ClearType::All))?;
         return Ok(());
     }
@@ -145,13 +209,13 @@ fn main() -> Result<()> {
         stdout.write_all(&seq)?;
         stdout.write_all(&placement)?;
         stdout.flush()?;
-        // Use raw mode for key read
+        // Use raw mode for key read; the guard restores it on every
+        // exit path and deletes the placed image.
         enable_raw_mode()?;
+        let mut guard = TerminalGuard::one_shot(true);
         eprint!("\r\nPress any key to exit...");
         let _ = crossterm::event::read();
-        disable_raw_mode()?;
-        stdout.write_all(&kitty::encode_delete_all())?;
-        stdout.flush()?;
+        guard.finish();
         execute!(std::io::stdout(), crossterm::terminal::Clear(crossterm::terminal::ClearType::All))?;
         return Ok(());
     }
@@ -227,17 +291,12 @@ fn main() -> Result<()> {
         app.set_mcp_state(state.clone());
     }
 
+    // Best-effort teardown: the guard also runs on error or panic,
+    // restoring raw mode, the mouse capture, and the alternate screen,
+    // and draining bytes queued on stdin (see TerminalGuard).
+    let mut guard = TerminalGuard::interactive(use_kitty);
     let result = app.run(&mut terminal);
-
-    // Terminal teardown — always restore, even on error.
-    disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        crossterm::event::DisableMouseCapture
-    )?;
-    terminal.show_cursor()?;
-
+    guard.finish();
     result?;
     Ok(())
 }

@@ -13,12 +13,21 @@
 //!    4096 bytes; all chunks but the last have a size that is a multiple
 //!    of 4.
 //! 2. The first chunk carries the full control data:
-//!    `i=<id>,f=24,s=<w>,v=<h>,m=1`. Later chunks carry only `m`.
+//!    `i=<id>,f=24,s=<w>,v=<h>,q=1,m=1`. Later chunks carry only `m`.
 //! 3. A placement request `a=p,i=<id>` displays the stored image at the
 //!    current cursor position, scaled to a `c` column x `r` row
 //!    rectangle. `z=-1` places the image below the text layer so the
 //!    status bar and axis indicator render on top of it. `C=1` keeps the
 //!    cursor in place after placement.
+//! 4. `q=1` suppresses the terminal's OK responses. This matters for a
+//!    raw-stdin event loop: a terminal that answers requests writes
+//!    `ESC_G i=<id>;OK` back on stdin, and the crossterm event reader
+//!    parses those bytes as key events. The `=` character of the
+//!    response used to hit the zoom key binding, which mutated the
+//!    camera, marked the image dirty, and triggered a re-transmit that
+//!    produced the next response: a self-sustaining feedback loop that
+//!    zoomed the view out until the program exited, with the leftover
+//!    response bytes leaking into the shell. See ADR-0002.
 
 use chemrust_vis_core::viewport::DrawCommands;
 
@@ -135,9 +144,12 @@ pub fn encode_transmission_rgb(
 /// Encode raw RGB bytes as chunked kitty transmission escapes.
 ///
 /// Per spec (remote client, chunked):
-/// - First escape: `\x1b_Gi=<id>,f=24,s=<w>,v=<h>,m=<1|0>;<chunk>\x1b\`
+/// - First escape: `\x1b_Gi=<id>,f=24,s=<w>,v=<h>,q=1,m=<1|0>;<chunk>\x1b\`
 /// - Middle escapes: `\x1b_Gm=<1>;<chunk>\x1b\`
 /// - Final escape: `\x1b_Gm=<0>;<chunk>\x1b\`
+///
+/// `q=1` suppresses the terminal's OK response to the stored image, so
+/// no protocol bytes are written back on stdin (see the module docs).
 pub fn encode_transmission(bytes: &[u8], width: u32, height: u32, image_id: u32) -> Vec<u8> {
     let b64 = base64_encode(bytes);
     let total = b64.len().div_ceil(MAX_CHUNK).max(1);
@@ -146,7 +158,7 @@ pub fn encode_transmission(bytes: &[u8], width: u32, height: u32, image_id: u32)
         let m = if i + 1 < total { 1 } else { 0 };
         if i == 0 {
             out.extend_from_slice(
-                format!("\x1b_Gi={image_id},f=24,s={width},v={height},m={m};").as_bytes(),
+                format!("\x1b_Gi={image_id},f=24,s={width},v={height},q=1,m={m};").as_bytes(),
             );
         } else {
             out.extend_from_slice(format!("\x1b_Gm={m};").as_bytes());
@@ -160,8 +172,12 @@ pub fn encode_transmission(bytes: &[u8], width: u32, height: u32, image_id: u32)
 /// Encode a placement request: display image `image_id` at the current
 /// cursor position, scaled to `cols` x `rows` cells, below the text
 /// layer, without moving the cursor.
+///
+/// `q=1` suppresses the placement response (`i=<id>,p=<pid>;OK`),
+/// which would otherwise be written back on stdin and parsed by the
+/// crossterm event reader as key events (see the module docs).
 pub fn encode_placement(image_id: u32, cols: u16, rows: u16) -> Vec<u8> {
-    format!("\x1b_Ga=p,i={image_id},c={cols},r={rows},z=-1,C=1\x1b\\").into_bytes()
+    format!("\x1b_Ga=p,i={image_id},c={cols},r={rows},z=-1,C=1,q=1\x1b\\").into_bytes()
 }
 
 /// Encode the delete action that removes all visible placements.
@@ -320,7 +336,7 @@ mod tests {
         let escs = split_escapes(&seq);
         assert_eq!(escs.len(), 1);
         let (ctrl, payload) = &escs[0];
-        assert_eq!(ctrl, "i=7,f=24,s=1,v=1,m=0");
+        assert_eq!(ctrl, "i=7,f=24,s=1,v=1,q=1,m=0");
         assert_eq!(base64_decode(payload), Some(vec![1, 2, 3, 4]));
     }
 
@@ -332,7 +348,7 @@ mod tests {
         let seq = encode_transmission(&bytes, 1333, 3, 1);
         let escs = split_escapes(&seq);
         assert_eq!(escs.len(), 2);
-        assert_eq!(escs[0].0, "i=1,f=24,s=1333,v=3,m=1");
+        assert_eq!(escs[0].0, "i=1,f=24,s=1333,v=3,q=1,m=1");
         assert_eq!(escs[1].0, "m=0");
         assert_eq!(escs[0].1.len(), MAX_CHUNK, "non-final chunk fills MAX_CHUNK");
         assert_eq!(escs[0].1.len() % 4, 0, "non-final chunks are 4-byte aligned");
@@ -374,7 +390,23 @@ mod tests {
     #[test]
     fn placement_sequence_bytes() {
         let seq = encode_placement(3, 80, 23);
-        assert_eq!(seq, b"\x1b_Ga=p,i=3,c=80,r=23,z=-1,C=1\x1b\\");
+        assert_eq!(seq, b"\x1b_Ga=p,i=3,c=80,r=23,z=-1,C=1,q=1\x1b\\");
+    }
+
+    #[test]
+    fn transmission_suppresses_terminal_responses() {
+        // q=1 on the first chunk: the terminal must not write the
+        // `i=<id>;OK` response back on stdin (feedback-loop guard).
+        let seq = encode_transmission(&[0u8; 3], 1, 1, 1);
+        let escs = split_escapes(&seq);
+        assert!(escs[0].0.contains("q=1"), "first chunk sets q=1");
+        assert!(escs[0].0.starts_with("i=1,"), "first chunk carries the id");
+    }
+
+    #[test]
+    fn placement_suppresses_terminal_responses() {
+        let seq = String::from_utf8(encode_placement(1, 80, 24)).unwrap();
+        assert!(seq.contains("q=1"), "placement sets q=1");
     }
 
     #[test]

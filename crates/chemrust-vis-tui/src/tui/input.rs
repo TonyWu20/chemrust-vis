@@ -60,13 +60,23 @@ pub fn handle_key_event(
             Action::Redraw
         }
 
-        // Zoom: +/- keys
-        (KeyModifiers::NONE, KeyCode::Char('+')) | (KeyModifiers::NONE, KeyCode::Char('=')) => {
-            camera.zoom(2.0);
+        // Zoom: +/- keys (and the mouse wheel). '+' shrinks the
+        // radius (zoom in), '-' grows it (zoom out), matching the
+        // scroll wheel: up = in, down = out.
+        //
+        // '=' is deliberately not bound. Terminals that implement the
+        // kitty graphics protocol answer requests with `i=<id>;OK` on
+        // stdin, and the crossterm event reader surfaces the `=`
+        // character of such a response as a key event. Binding it
+        // would let a terminal response mutate the camera; the
+        // renderer suppresses responses with q=1, and this is the
+        // second line of defense (see ADR-0002).
+        (KeyModifiers::NONE, KeyCode::Char('+')) => {
+            camera.zoom(-2.0);
             Action::Redraw
         }
         (KeyModifiers::NONE, KeyCode::Char('-')) => {
-            camera.zoom(-2.0);
+            camera.zoom(2.0);
             Action::Redraw
         }
 

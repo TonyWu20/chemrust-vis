@@ -43,6 +43,17 @@ Support the kitty graphics protocol as an **optional** scene renderer.
     viewport, or terminal size changes; otherwise the placement persists.
 - CLI: `--renderer auto|halfblock|kitty` (default `auto` = detect).
   `--kitty` renders one frame and exits, mirroring `--sixel`.
+- **Terminal responses are suppressed with `q=1`.** The spec replies
+  `ESC_G i=<id>;OK` to requests that carry an image id. In a
+  raw-stdin event loop, those response bytes return on stdin and the
+  event reader parses them as key events. The first implementation
+  left `=` bound to zoom: the `=` of every response mutated the
+  camera, marked the image dirty, and triggered the re-transmit that
+  produced the next response. The loop zoomed the view out until the
+  program exited, and the leftover bytes leaked into the shell
+  (reported on Ghostty). All transmits and placements now set
+  `q=1`, `=` is not a key binding, and a `TerminalGuard` in `main.rs`
+  restores the terminal and drains stdin on every exit path.
 - The half-block renderer remains the universal fallback. Plain
   terminals and tmux without pass-through keep the current behavior.
   Unsupported terminals ignore APC codes, so a forced kitty render degrades
@@ -72,6 +83,11 @@ Support the kitty graphics protocol as an **optional** scene renderer.
 - **Fixed cell aspect assumption.** The pixel buffer uses 2 px wide by
   4 px tall per cell. A terminal with a very different cell aspect gets
   a slight letterbox.
+- **Terminals that ignore `q=1`** can still write responses back. The
+  response characters are inert: no key binding maps them to camera
+  actions, and `=` is deliberately unbound. A lone ESC byte from a
+  response can still read as the quit key under the crossterm parser;
+  that is a parser behavior, not an app-level defect.
 
 ### Neutral / design implications
 
@@ -113,6 +129,16 @@ terminal. Raw RGB is simpler and needs no encoder.
 - Terminals implementing the protocol: https://sw.kovidgoyal.net/kitty/graphics-protocol/#other-terminals-that-have-implemented-the-graphics-protocol
 - ADR-0001 (partially superseded): ./0001-braille-canvas-rendering.md
 - Encoder: `crates/chemrust-vis-tui/src/tui/kitty.rs`
+
+## Amendment (2026-10-14)
+
+The Ghostty incident (view zoomed out and the program exited with
+`i=1;OK` bytes leaking into the shell) was a response feedback loop,
+fixed the same day: `q=1` on every transmit and placement, `=`
+unbound, and a `TerminalGuard` that restores the terminal and drains
+stdin on all exit paths. The decisions in this ADR are unchanged;
+this section records the amendment so unsuppressed responses are not
+re-introduced.
 
 ## Accepted limits
 
