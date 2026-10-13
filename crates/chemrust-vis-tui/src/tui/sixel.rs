@@ -137,3 +137,71 @@ pub(crate) fn draw_line_px(buf: &mut [[u8; 3]], w: usize, h: usize, x1: f64, y1:
         if e2 <= dx { if y == y2i { break; } err += dx; y += sy; }
     }
 }
+
+// ── Terminal detection ─────────────────────────────────────────────────────
+
+/// Detect whether the current terminal renders sixel, from the
+/// environment.
+///
+/// Known sixel-capable signals: `TERM_PROGRAM=iTerm.app`, `TERM`
+/// starting with `xterm` (the real xterm), `TERM=foot`, and tmux
+/// sessions (pass-through, which depends on the outer terminal).
+/// Terminals on the kitty-protocol side (kitty, WezTerm, Ghostty) do
+/// not implement sixel and are rejected first; `xterm-ghostty`
+/// starts with `xterm`, so the order matters.
+///
+/// This is a heuristic, in the same class as `kitty::detect_kitty`.
+pub fn terminal_supports_sixel() -> bool {
+    let term_program = std::env::var("TERM_PROGRAM").ok();
+    let term = std::env::var("TERM").ok();
+    let in_tmux = std::env::var_os("TMUX").is_some();
+    detect_sixel(term_program.as_deref(), term.as_deref(), in_tmux)
+}
+
+/// Pure detection logic, split out for testing without touching env vars.
+pub fn detect_sixel(
+    term_program: Option<&str>,
+    term: Option<&str>,
+    in_tmux: bool,
+) -> bool {
+    // Kitty-protocol terminals do not implement sixel. Check this
+    // first: `xterm-ghostty` starts with `xterm` and would otherwise
+    // look like the xterm sixel case.
+    if crate::tui::kitty::detect_kitty(term_program, term, false) {
+        return false;
+    }
+    if let Some(tp) = term_program {
+        if tp.eq_ignore_ascii_case("iterm.app") {
+            return true;
+        }
+    }
+    if let Some(t) = term {
+        let t = t.to_ascii_lowercase();
+        if t.starts_with("xterm") || t == "foot" {
+            return true;
+        }
+    }
+    in_tmux
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detect_sixel_env_signals() {
+        // Known sixel-capable terminals.
+        assert!(detect_sixel(Some("iTerm.app"), Some("xterm-256color"), false));
+        assert!(detect_sixel(None, Some("xterm"), false));
+        assert!(detect_sixel(None, Some("foot"), false));
+        assert!(detect_sixel(None, Some("xterm-256color"), true), "tmux pass-through");
+        // Kitty-protocol terminals: no sixel, including xterm-ghostty.
+        assert!(!detect_sixel(Some("ghostty"), Some("xterm-ghostty"), false));
+        assert!(!detect_sixel(Some("kitty"), Some("kitty"), false));
+        assert!(!detect_sixel(Some("WezTerm"), None, false));
+        assert!(!detect_sixel(None, Some("xterm-ghostty"), false));
+        // Unknown plain terminal, no tmux: no sixel signal.
+        assert!(!detect_sixel(Some("Alacritty"), Some("alacritty"), false));
+        assert!(!detect_sixel(None, None, false));
+    }
+}

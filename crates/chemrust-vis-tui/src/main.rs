@@ -52,6 +52,9 @@ struct Cli {
     renderer: Renderer,
 
     /// Render a single frame as sixel and exit (no TUI).
+    /// Works in xterm, foot, and iTerm2. kitty, WezTerm, and
+    /// Ghostty use the kitty graphics protocol instead. Use
+    /// --kitty there.
     #[arg(long, conflicts_with = "kitty")]
     sixel: bool,
 
@@ -165,6 +168,19 @@ fn main() -> Result<()> {
             w, h, cmds.points.len(), cmds.lines.len());
         let data = sixel::encode_sixel(&pixels, w, h);
         eprintln!("Sixel data: {} bytes", data.len());
+        if !sixel::terminal_supports_sixel() {
+            if crate::tui::kitty::terminal_supports_kitty() {
+                eprintln!(
+                    "Note: this terminal uses the kitty graphics protocol, not sixel. \
+                     The image will not display. Use --kitty instead."
+                );
+            } else {
+                eprintln!(
+                    "Note: this terminal does not appear to support sixel. \
+                     The image may not display."
+                );
+            }
+        }
 
         let mut stdout = std::io::stdout();
         write!(stdout, "\x1b[2J\x1b[H")?; // clear screen, home cursor

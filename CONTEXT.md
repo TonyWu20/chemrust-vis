@@ -208,6 +208,13 @@ switch to a versioned dependency.
   The decider accepted the known limits of this choice on 2026-10-13.
   See the "Accepted limits" section of ADR-0002.
 
+- **One-shot `--sixel`** — Sixel only renders on terminals that implement
+  it: xterm, foot, and iTerm2 (tmux via pass-through). kitty, WezTerm,
+  and Ghostty do not implement sixel, so sixel data is silently ignored
+  there. Since 2026-10-14, `--sixel` warns when the terminal does not
+  appear to support sixel, and suggests `--kitty` when the terminal
+  supports the kitty protocol.
+
 ---
 
 ## 5. Coding Patterns
