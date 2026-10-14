@@ -106,9 +106,9 @@ Sixel works in xterm, foot, iTerm2, and WezTerm, and tmux can pass it
 through. It is not the chosen path for interactive rendering because
 tmux pass-through is inconsistent and the sixel encoding (6-pixel
 subbands, palette limits) gives less control than the kitty protocol
-for shaded spheres. The one-shot `--sixel` preview path remains, and
-since 2026-10-14 it sizes its buffer from the terminal's real pixel
-size (xterm `CSI 8 t` query, `--sixel-px` override, 12x24 fallback).
+for shaded spheres. The one-shot `--sixel` preview path existed until
+2026-10-14 and was then removed (third amendment below). Sixel stays
+a candidate for a future one-shot or image-export path.
 
 ### `ratatui-image` crate
 
@@ -171,6 +171,28 @@ at half the expected size. Both defects were in `sixel.rs`:
 The kitty renderer is unchanged: it places the image in a cell
 rectangle, so its 2x4 px-per-cell assumption only affects content
 framing, not placement.
+
+## Amendment (2026-10-14, third)
+
+Despite the color and size fixes in the second amendment, the
+decider judged the WezTerm sixel render still off and asked for
+sixel support to be removed for now. This amendment records that
+removal.
+
+- Removed: the `--sixel` and `--sixel-px` flags and their code paths,
+  the sixel encoder (`encode_sixel`), the terminal sixel detection
+  (`terminal_supports_sixel`, `detect_sixel`), and the `CSI 8 t`
+  pixel-size query (`query_cell_pixels`, `parse_pixel_size_report`,
+  `parse_px_cell`). The `libc` dependency added for the query went
+  with it.
+- Kept: `render_to_pixels`, `fill_circle_px`, and `draw_line_px` in
+  `sixel.rs`, because the kitty renderer builds its image on those
+  primitives. The `--kitty` one-shot and the interactive kitty
+  renderer are unchanged.
+- The sixel encoder design (0-100 percent color system 0 definitions
+  with an immediate select, pixel-size query, 12x24 fallback) is
+  recorded in the second amendment and this ADR's alternatives, so a
+  revisit can start from there.
 
 ## Accepted limits
 

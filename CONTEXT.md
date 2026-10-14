@@ -97,13 +97,13 @@ chemrust-vis/
     chemrust-vis-tui/     # binary crate
       Cargo.toml
       src/
-        main.rs           # entry point, CLI args (--mcp, --sixel, --kitty, --renderer)
+        main.rs           # entry point, CLI args (--mcp, --kitty, --renderer)
         tui/              # TUI application
           mod.rs
           app.rs          # event loop, layout, renderer selection
           input.rs        # keyboard + mouse event handling
           mcp_server.rs   # background MCP TCP server
-          sixel.rs        # one-shot sixel encoder, shared pixel primitives
+          sixel.rs        # shared pixel primitives for the kitty renderer
           kitty.rs        # kitty graphics protocol encoder, pixel renderer
           widgets/        # custom ratatui widgets
             scene_view.rs # half-block scene widget
@@ -189,7 +189,7 @@ switch to a versioned dependency.
 
 - **NOT `nalgebra` + `glam`** — Rejected dual-math-library approach. Converting between nalgebra and glam types at the boundary adds friction without benefit. nalgebra handles all 3D math needed (projections, ray casting, camera transforms).
 - **NOT `termion`** — crossterm chosen for better maintenance, Windows support (future), and tighter ratatui integration.
-- **NOT interactive `sixel` rendering** — Sixel stays a one-shot preview path (`--sixel`). Interactive sixel was rejected: tmux sixel pass-through is inconsistent, and the half-block renderer already covers basic terminals.
+- **No sixel rendering at all** — Interactive sixel was rejected: tmux sixel pass-through is inconsistent, and the half-block renderer already covers basic terminals. The one-shot `--sixel` preview path was removed on 2026-10-14 (the WezTerm render still looked off). The shared pixel primitives in `sixel.rs` remain, because the kitty renderer builds on them.
 
 ### 4.5 Accepted graphics choices
 
@@ -208,14 +208,13 @@ switch to a versioned dependency.
   The decider accepted the known limits of this choice on 2026-10-13.
   See the "Accepted limits" section of ADR-0002.
 
-- **One-shot `--sixel`** — Sixel only renders on terminals that implement
-  it: xterm, foot, iTerm2, and WezTerm (tmux via pass-through). kitty
-  and Ghostty do not implement sixel, so sixel data is silently ignored
-  there. Since 2026-10-14, `--sixel` warns when the terminal does not
-  appear to support sixel. Sixel has no size fields: the terminal maps
-  image pixels to cells at its font size. `--sixel` asks the terminal
-  for its pixel size (xterm `CSI 8 t` extension) and falls back to
-  12x24 px per cell. `--sixel-px <W>x<H>` forces it.
+- **One-shot `--sixel` — removed 2026-10-14** — The flag, the sixel
+  encoder, and the `CSI 8 t` pixel-size query are gone (the WezTerm
+  render still looked off after the color and size fixes). Terminal
+  sixel support facts for a future revisit: xterm, foot, iTerm2, and
+  WezTerm implement sixel; kitty and Ghostty do not. Sixel has no
+  size fields, so the terminal maps image pixels to cells at its font
+  cell size.
 
 ---
 

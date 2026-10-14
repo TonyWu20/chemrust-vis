@@ -51,18 +51,6 @@ struct Cli {
     #[arg(long, value_enum, default_value_t = Renderer::Auto)]
     renderer: Renderer,
 
-    /// Render a single frame as sixel and exit (no TUI).
-    /// Works in xterm, foot, iTerm2, and WezTerm.
-    #[arg(long, conflicts_with = "kitty")]
-    sixel: bool,
-
-    /// Pixel size per terminal cell for the --sixel one-shot mode,
-    /// as `<W>x<H>` (example: 12x24). Overrides the `CSI 8 t`
-    /// pixel-size query; the 12x24 fallback applies when neither
-    /// is available.
-    #[arg(long, value_name = "WxH")]
-    sixel_px: Option<String>,
-
     /// Render a single frame as a kitty image and exit (no TUI).
     #[arg(long)]
     kitty: bool,
@@ -157,75 +145,6 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    if cli.sixel {
-        use chemrust_vis_core::camera::Camera;
-        use chemrust_vis_core::viewport::Viewport;
-        use crate::tui::sixel;
-        use std::io::Write;
-
-        let center = scene.center_for_view();
-        let camera = Camera::from_target(center, 16.0);
-        let (cols, rows) = terminal_size();
-
-        // Pixel size per cell. An explicit --sixel-px flag wins.
-        // Otherwise ask the terminal (xterm CSI 8 t extension),
-        // which must happen in raw mode. Fall back to 12x24.
-        enable_raw_mode().context("Failed to enable raw mode")?;
-        let mut guard = TerminalGuard::one_shot(false);
-        let px_w: u32;
-        let px_h: u32;
-        match cli.sixel_px.as_deref().map(sixel::parse_px_cell) {
-            Some(Some(p)) => {
-                px_w = p.0;
-                px_h = p.1;
-            }
-            Some(None) => {
-                eprintln!("Note: could not parse --sixel-px. Using 12x24 px per cell.");
-                px_w = 12;
-                px_h = 24;
-            }
-            None => match sixel::query_cell_pixels(cols, rows) {
-                Some(p) => {
-                    px_w = p.0;
-                    px_h = p.1;
-                }
-                None => {
-                    eprintln!(
-                        "Note: the terminal did not report its pixel size. \
-                         Rendering at 12x24 px per cell. Set it with --sixel-px <W>x<H>."
-                    );
-                    px_w = 12;
-                    px_h = 24;
-                }
-            },
-        }
-        let vp = Viewport::new(cols as f64 * px_w as f64, rows as f64 * px_h as f64);
-        let cmds = vp.render(&scene, &camera);
-        let (w, h, pixels) =
-            sixel::render_to_pixels(&cmds, cols as usize * px_w as usize, rows as usize * px_h as usize);
-        eprintln!("Rendered {}×{} pixels, {} atoms, {} edges",
-            w, h, cmds.points.len(), cmds.lines.len());
-        let data = sixel::encode_sixel(&pixels, w, h);
-        eprintln!("Sixel data: {} bytes", data.len());
-        if !sixel::terminal_supports_sixel() {
-            eprintln!(
-                "Note: this terminal does not appear to render sixel. \
-                 The image may not display. Use --kitty where the kitty \
-                 graphics protocol is available."
-            );
-        }
-
-        let mut stdout = std::io::stdout();
-        write!(stdout, "\x1b[2J\x1b[H")?; // clear screen, home cursor
-        stdout.write_all(data.as_bytes())?;
-        stdout.flush()?;
-        eprint!("\r\nPress any key to exit...");
-        let _ = crossterm::event::read();
-        guard.finish();
-        execute!(std::io::stdout(), crossterm::terminal::Clear(crossterm::terminal::ClearType::All))?;
-        return Ok(());
-    }
-
     if cli.kitty {
         use chemrust_vis_core::camera::Camera;
         use chemrust_vis_core::viewport::Viewport;
@@ -237,8 +156,8 @@ fn main() -> Result<()> {
         let (cols, rows) = terminal_size();
         let vp = Viewport::new(cols as f64 * 12.0, rows as f64 * 24.0);
         let cmds = vp.render(&scene, &camera);
-        // Same content fit as the sixel one-shot, sent over the
-        // kitty protocol instead.
+        // Render at the terminal's cell size (2x4 px per cell) and
+        // send it over the kitty protocol.
         let (w, h, pixels) = sixel::render_to_pixels(&cmds, cols as usize * 12, rows as usize * 24);
         eprintln!("Rendered {}×{} pixels, {} atoms, {} edges",
             w, h, cmds.points.len(), cmds.lines.len());
