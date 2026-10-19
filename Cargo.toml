@@ -2,6 +2,7 @@
 members = [
     "crates/chemrust-vis-core",
     "crates/chemrust-vis-tui",
+    "crates/chemrust-vis-render",
 ]
 resolver = "2"
 
