@@ -1,27 +1,29 @@
-//! chemrust-vis-frame — render one lattice frame to PNG or SVG.
+//! chemrust-vis-frame — render one lattice frame to PNG.
 //!
 //! Usage:
-//!   chemrust-vis-frame <model.cell> <out.png|out.svg> [options]
+//!   chemrust-vis-frame <model.cell> <out.png> [options]
 //!
 //! Options:
-//!   --theta DEG          camera azimuth (default 30)
-//!   --phi DEG           camera elevation (default 20)
-//!   --zoom F            zoom, 1.0 = fit to frame (default 1.0)
-//!   --size WxH          canvas, e.g. 1200x900 (default 1200x900)
-//!   --no-cell           skip the cell box
-//!   --no-bonds          skip covalent bonds
-//!   --bond-factor F    multiply on the covalent-radius pair sum (default 1.25)
+//!   --theta DEG        camera azimuth in degrees (default 30)
+//!   --phi DEG         camera polar angle from +Z in degrees;
+//!                     0 = top view, 90 = horizon (default 30)
+//!   --atom-r PX        on-screen atom radius in pixels (default 10)
+//!   --site-r PX        on-screen site marker radius in pixels (default 6)
+//!   --size WxH         canvas, e.g. 1600x1000 (default 1600x1000)
+//!   --no-cell          skip the cell box
+//!   --no-bonds         skip covalent bonds
+//!   --no-sites-on-top  depth-sort site markers instead of drawing them last
+//!   --bond-factor F    multiply on the covalent-radius pair sum (default 1.15)
 //!   --sites FILE.json  overlay site markers from a site dump
-//!   --atom-r F         base atom radius in pixels (default 10)
 
 use std::path::PathBuf;
 
-use chemrust_vis_render::{load_sites, load_structure, render_png, render_svg, FrameSpec};
+use chemrust_vis_render::{load_sites, load_structure, render_png, FrameSpec};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 3 {
-        eprintln!("usage: chemrust-vis-frame <model.cell> <out.png|out.svg> [options]");
+        eprintln!("usage: chemrust-vis-frame <model.cell> <out.png> [options]");
         std::process::exit(2);
     }
     let model = PathBuf::from(&args[1]);
@@ -37,9 +39,6 @@ fn main() {
             }
             "--phi" => {
                 spec.phi = arg(&args, &mut i).parse().expect("--phi takes a number");
-            }
-            "--zoom" => {
-                spec.zoom = arg(&args, &mut i).parse().expect("--zoom takes a number");
             }
             "--size" => {
                 let s = arg(&args, &mut i);
@@ -61,7 +60,12 @@ fn main() {
                 sites = load_sites(&p).expect("read --sites file");
             }
             "--atom-r" => {
-                spec.atom_px = arg(&args, &mut i).parse().expect("--atom-r takes a number");
+                spec.atom_radius_px =
+                    arg(&args, &mut i).parse().expect("--atom-r takes a number");
+            }
+            "--site-r" => {
+                spec.site_radius_px =
+                    arg(&args, &mut i).parse().expect("--site-r takes a number");
             }
             other => {
                 eprintln!("unknown option {other}");
@@ -73,14 +77,7 @@ fn main() {
     spec.sites = sites;
 
     let structure = load_structure(&model).expect("load model");
-    let ext = out.extension().and_then(|e| e.to_str()).unwrap_or("");
-    let bytes: Vec<u8> = match ext {
-        "svg" => {
-            let text = render_svg(&structure, &spec).expect("render SVG");
-            text.into_bytes()
-        }
-        _ => render_png(&structure, &spec).expect("render PNG"),
-    };
+    let bytes = render_png(&structure, &spec).expect("render PNG");
     std::fs::write(&out, bytes).expect("write output");
     println!("wrote {}", out.display());
 }
