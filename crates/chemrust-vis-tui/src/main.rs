@@ -156,8 +156,8 @@ fn main() -> Result<()> {
         let (cols, rows) = terminal_size();
         let vp = Viewport::new(cols as f64 * 12.0, rows as f64 * 24.0);
         let cmds = vp.render(&scene, &camera);
-        // Render at the terminal's cell size (2x4 px per cell) and
-        // send it over the kitty protocol.
+        // One-shot grid: 12x24 px per cell. The transmit happens
+        // once, so the multi-megabyte payload is acceptable here.
         let (w, h, pixels) = sixel::render_to_pixels(&cmds, cols as usize * 12, rows as usize * 24);
         eprintln!("Rendered {}×{} pixels, {} atoms, {} edges",
             w, h, cmds.points.len(), cmds.lines.len());

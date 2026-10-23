@@ -92,6 +92,83 @@ pub fn detect_kitty(
     false
 }
 
+
+// ── Native pixel size ────────────────────────────────────────────
+
+/// Query the terminal's text-area pixel size.
+///
+/// Read via the pty `TIOCGWINSZ` ioctl on the stdout file descriptor
+/// (`ws_xpixel`, `ws_ypixel`). kitty, WezTerm, Ghostty, and xterm
+/// fill these fields. Terminals that leave them zero, and stdout that
+/// is not a tty, yield `None`; the caller then falls back to the 2x4
+/// px-per-cell grid.
+#[cfg(unix)]
+pub fn terminal_pixel_size() -> Option<(u32, u32)> {
+    use libc::{ioctl, winsize, TIOCGWINSZ, STDOUT_FILENO};
+
+    let mut ws: winsize = unsafe { std::mem::zeroed() };
+    let ok = unsafe { ioctl(STDOUT_FILENO, TIOCGWINSZ, &mut ws) };
+    if ok < 0 {
+        return None;
+    }
+    let w = u32::from(ws.ws_xpixel);
+    let h = u32::from(ws.ws_ypixel);
+    if w == 0 || h == 0 {
+        return None;
+    }
+    Some((w, h))
+}
+
+/// The native pixel size is unavailable on non-Unix platforms.
+#[cfg(not(unix))]
+pub fn terminal_pixel_size() -> Option<(u32, u32)> {
+    None
+}
+
+/// Linear scale of the terminal's native text-area resolution for
+/// the interactive kitty image.
+///
+/// Full-scale frames are too heavy for camera drags: an 80x24 window
+/// with a 960x480 px text area transmits ~1.7 MB of base64 per
+/// re-transmit. At 0.5x the same window transmits ~430 KB. The
+/// terminal scales the image to the placement rectangle, so display
+/// size is unchanged; only the source resolution drops.
+pub const NATIVE_FRAME_SCALE: f64 = 0.5;
+
+/// Compute the pixel buffer size for one kitty frame.
+///
+/// When `native` reports the text area in pixels, the image spans the
+/// full width and its height is proportional to `scene_rows` (the
+/// status bar row is not covered), then scaled by
+/// [`NATIVE_FRAME_SCALE`]. This matches the placement rectangle's
+/// aspect, so no letterbox is needed. When the query fails or the
+/// result is too small to be useful, the 2x4 px-per-cell grid is used
+/// instead.
+pub fn frame_pixel_size(
+    cols: u16,
+    rows: u16,
+    scene_rows: u16,
+    native: Option<(u32, u32)>,
+) -> (usize, usize) {
+    let fallback = (cols as usize * 2, scene_rows as usize * 4);
+    let Some((w, h)) = native else {
+        return fallback;
+    };
+    if rows == 0 {
+        return fallback;
+    }
+    let cell_h = h / (rows as u32);
+    if cell_h < 2 {
+        return fallback;
+    }
+    let px_w = (f64::from(w) * NATIVE_FRAME_SCALE).round() as usize;
+    let px_h = ((f64::from(cell_h) * f64::from(scene_rows)) * NATIVE_FRAME_SCALE).round() as usize;
+    if px_w < 8 || px_h < 4 {
+        return fallback;
+    }
+    (px_w, px_h)
+}
+
 // ── Base64 ──────────────────────────────────────────────────────────────────
 
 /// Standard base64 alphabet.
@@ -468,5 +545,31 @@ mod tests {
         assert!(escs[1].0.starts_with("a=p,i=1,"), "second escape is a placement");
         assert!(escs[1].0.contains("c=10"), "placement width");
         assert!(escs[1].0.contains("r=5"), "placement height");
+    }
+
+    #[test]
+    fn frame_pixel_size_falls_back_to_2x4() {
+        assert_eq!(frame_pixel_size(80, 24, 23, None), (160, 92));
+        assert_eq!(frame_pixel_size(80, 24, 23, Some((0, 0))), (160, 92));
+        // A too-small width is rejected.
+        assert_eq!(frame_pixel_size(80, 24, 23, Some((4, 480))), (160, 92));
+        // 1 px rows: a broken report, rejected.
+        assert_eq!(frame_pixel_size(80, 24, 23, Some((960, 24))), (160, 92));
+    }
+
+    #[test]
+    fn frame_pixel_size_uses_native_pixels_scaled() {
+        // An 80x24 text area at 12x20 px cells: width 960, scene
+        // height = 20 px * 23 rows = 460. At the 0.5x native scale:
+        // (480, 230).
+        assert_eq!(frame_pixel_size(80, 24, 23, Some((960, 480))), (480, 230));
+        assert_eq!(frame_pixel_size(80, 5, 4, Some((600, 200))), (300, 80));
+    }
+
+    #[test]
+    fn frame_pixel_size_scaled_result_still_sane() {
+        // A native size that scales down to a too-small image falls
+        // back to the 2x4 grid. 8x4 px is rejected before scaling.
+        assert_eq!(frame_pixel_size(80, 24, 23, Some((8, 48))), (160, 92));
     }
 }

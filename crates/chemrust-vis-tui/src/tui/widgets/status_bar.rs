@@ -1,5 +1,5 @@
-//! Status bar widget showing file name, atom count, camera state, and
-//! the active scene renderer.
+//! Status bar widget showing file name, atom count, camera state,
+//! the active scene renderer, and the kitty frame pixel size.
 
 use ratatui::{
     buffer::Buffer,
@@ -19,6 +19,9 @@ pub struct StatusBar {
     pub radius: f64,
     /// Active scene renderer: "kitty" or "half-block".
     pub renderer: &'static str,
+    /// Last transmitted kitty frame size in pixels. `None` for the
+    /// half-block renderer, or before the first kitty frame.
+    pub kitty_px: Option<(u32, u32)>,
     /// Snipe mode active: orbit and move-zoom run at 1/10 sensitivity.
     pub sniped: bool,
 }
@@ -39,6 +42,9 @@ impl Widget for StatusBar {
                 self.renderer
             )),
         ];
+        if let Some((w, h)) = self.kitty_px {
+            spans.push(Span::raw(format!(" {w}\u{00d7}{h}px")));
+        }
         if self.sniped {
             spans.push(Span::raw(" | "));
             spans.push(Span::styled("snipe", Style::default().fg(Color::Yellow)));

@@ -194,6 +194,76 @@ removal.
   recorded in the second amendment and this ADR's alternatives, so a
   revisit can start from there.
 
+## Amendment (2026-10-21, fourth)
+
+### The `kitty-graphics-protocol` crate was evaluated and rejected
+
+On 2026-10-21 the decider asked whether `kitty-graphics-protocol`
+0.1.3 replaces the hand-rolled encoder in `kitty.rs`. The evaluation
+found:
+
+- The crate covers only the transport layer (command builder,
+  chunked base64). Detection, rasterization, and re-transmit state
+  stay hand-rolled either way.
+- The builder output differs from our escapes: an explicit `a=t` on
+  transmits, a trailing `;` on payload-free placements, `a=d,d=a`
+  for delete-all. All forms are spec-valid. This protocol already
+  caused a production incident (the Ghostty feedback loop), so the
+  diff needs real-terminal re-verification.
+- The convenience functions use `a=T` (transmit and display at the
+  cursor) with `quiet(2)`. That changes the flow semantics.
+- A spec bug was verified: `query_window_size` sends `CSI 14 t`
+  (screen origin) but parses the `CSI 16 t` (text-area pixel)
+  response.
+- The crate adds `base64`, `thiserror`, and `libc` to the tree,
+  against the "no new dependencies" benefit recorded above. It is
+  0.1.x, and its docs.rs build failed.
+
+**Decision: keep the hand-rolled encoder.** No crate dependency was
+added. The encoder, its tests, and the byte-stability guarantee
+stay. A stale comment in `main.rs` was also fixed: it claimed the
+one-shot renders at 2x4 px per cell while the code uses 12x24.
+
+### Native pixel resolution for the interactive renderer
+
+The interactive renderer used a fixed 2x4 px-per-cell grid. The
+one-shot `--kitty` used 12x24 px per cell. The interactive view
+carried 37x fewer pixels at 80x24.
+
+**Decision:** the interactive renderer now queries the terminal's
+native text-area pixel size via the `TIOCGWINSZ` pty ioctl on
+stdout (`ws_xpixel`, `ws_ypixel`). The image spans the full width.
+Its height is proportional to the scene rows. Both dimensions are
+then scaled by `NATIVE_FRAME_SCALE` (0.5x linear) to keep
+re-transmits fast during camera drags. When the query fails or the
+result is too small, the renderer falls back to the 2x4 px-per-cell
+grid. The mouse vertical scale uses the px-per-row of the last
+transmitted frame.
+
+Consequences:
+
+- Re-introduces `libc` as a Unix-only target dependency. The third
+  amendment removed `libc` with the sixel stdin-query path. This
+  path reads no stdin and needs no raw mode.
+- Supersedes the "Fixed cell aspect assumption" negative item and
+  the 1:2-aspect "Accepted limit". The 1:2 assumption now applies
+  only to the fallback grid.
+- Re-transmit cost is bounded by the scale factor. At full scale,
+  an 80x24 terminal reporting a 960x480 text area transmits
+  ~1.7 MB of base64 per re-transmit, which dropped the interactive
+  frame rate. At the 0.5x scale the same window transmits ~430 KB.
+  The fallback grid transmits ~59 KB. A static view still sends
+  one image per session.
+- The status bar shows the last transmitted kitty frame size
+  (for example `kitty 240×460px`), so the active grid is visible
+  on screen. The value is computed on the first draw pass and
+  refreshed whenever a new frame is built.
+- Verification: a forced-pty test ran the TUI under a pty with a
+  known pixel size and checked the transmitted `s`/`v` fields and
+  the status bar text. A 480x960 px pty transmitted `s=240,v=460`
+  (the 0.5x of 480x920) and showed `kitty 240×460px`. Zero-pixel
+  ptys and pipes fell back to 2x4 as designed.
+
 ## Accepted limits
 
 On 2026-10-13 the decider accepted the limits in the "Negative"
@@ -205,6 +275,8 @@ section above:
   the outer terminal supports the protocol. Otherwise the text UI runs
   unchanged.
 - The kitty pixel buffer assumes a 1:2 cell aspect (2x4 px per cell).
-  Terminals with unusual cell aspects show a slight letterbox. The
+  Terminals with unusual cell aspects show a slight letterbox. (Superseded
+  by the fourth amendment: 2x4 is now the fallback grid; the renderer
+  prefers the terminal's reported pixel size.) The
   `--sixel` one-shot path sizes its buffer from the queried pixel
   size instead (amendment above).

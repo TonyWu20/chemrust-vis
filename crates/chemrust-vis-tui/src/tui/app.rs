@@ -54,6 +54,12 @@ pub struct App {
     /// Placement size (cols, scene_rows) of the last transmitted image.
     /// (0, 0) means no image was sent yet.
     kitty_placement: (u16, u16),
+    /// Vertical pixels per terminal row in the last transmitted kitty
+    /// frame; the mouse `y_scale` of the pixel renderer.
+    kitty_px_per_row: f64,
+    /// Last transmitted kitty frame size in pixels; shown in the
+    /// status bar so the active grid is visible.
+    kitty_frame_px: Option<(u32, u32)>,
 }
 
 impl App {
@@ -88,6 +94,8 @@ impl App {
             kitty: None,
             kitty_dirty: false,
             kitty_placement: (0, 0),
+            kitty_px_per_row: 4.0,
+            kitty_frame_px: None,
         }
     }
 
@@ -142,10 +150,15 @@ impl App {
                     self.mark_kitty_dirty();
                 }
                 Event::Mouse(mouse) => {
-                    // Vertical viewport units per terminal row: the kitty
-                    // pixel grid is 4 px per row, the half-block dot
-                    // grid is 2 dots per row.
-                    let y_scale = if self.kitty.is_some() { 4.0 } else { 2.0 };
+                    // Vertical viewport units per terminal row: the
+                    // half-block dot grid is 2 dots per row; the kitty
+                    // pixel grid uses the row height of the last
+                    // transmitted frame.
+                    let y_scale = if self.kitty.is_some() {
+                        self.kitty_px_per_row
+                    } else {
+                        2.0
+                    };
                     let action = input::handle_mouse_event(
                         &mouse,
                         &mut self.camera,
@@ -196,12 +209,14 @@ impl App {
         if cols < 8 || scene_rows < 4 {
             return Ok(());
         }
-        // Pixel size: 2 px wide x 4 px tall per cell, the 1:2 cell
-        // aspect, so the placement rectangle needs no letterboxing.
-        let px_w = (cols * 2) as usize;
-        let px_h = (scene_rows * 4) as usize;
+        // Pixel size: the terminal's native text-area pixels when the
+        // pty reports them, otherwise the 2x4 px-per-cell grid.
+        let native = kitty::terminal_pixel_size();
+        let (px_w, px_h) = kitty::frame_pixel_size(cols, rows, scene_rows, native);
         self.viewport.width = px_w as f64;
         self.viewport.height = px_h as f64;
+        self.kitty_px_per_row = px_h as f64 / scene_rows as f64;
+        self.kitty_frame_px = Some((px_w as u32, px_h as u32));
         if !self.kitty_dirty && self.kitty_placement == (cols, scene_rows) {
             return Ok(());
         }
@@ -252,6 +267,18 @@ impl App {
         if self.kitty.is_some() {
             // Leave the scene area empty. The pixel image is placed
             // below it after this text pass (render_kitty_image).
+            // First pass: compute the frame size now so the status
+            // bar shows it without waiting for an event.
+            if self.kitty_frame_px.is_none()
+                && area.width >= 8
+                && scene_rows >= 4
+            {
+                let rows = scene_rows + 1;
+                let native = kitty::terminal_pixel_size();
+                let (px_w, px_h) =
+                    kitty::frame_pixel_size(area.width, rows, scene_rows, native);
+                self.kitty_frame_px = Some((px_w as u32, px_h as u32));
+            }
         } else {
             // Half-block: 2x2 dots per character
             self.viewport.width = area.width as f64 * 2.0;
@@ -285,6 +312,7 @@ impl App {
                 phi_deg: self.camera.phi().to_degrees().rem_euclid(360.0),
                 radius: self.camera.radius(),
                 renderer: if self.kitty.is_some() { "kitty" } else { "half-block" },
+                kitty_px: self.kitty_frame_px,
                 sniped: self.nav_state.sniped,
             },
             layout[1],
