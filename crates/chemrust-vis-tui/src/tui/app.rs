@@ -70,10 +70,9 @@ impl App {
         let center = scene.center_for_view();
 
         let (min, max) = bounding_box_corners(&scene);
-        let diag = ((max[0] - min[0]).powi(2)
-            + (max[1] - min[1]).powi(2)
-            + (max[2] - min[2]).powi(2))
-        .sqrt();
+        let diag =
+            ((max[0] - min[0]).powi(2) + (max[1] - min[1]).powi(2) + (max[2] - min[2]).powi(2))
+                .sqrt();
         let radius = (diag * 0.6).max(5.0);
 
         let num_atoms = scene.atoms.iter().filter(|a| !a.is_periodic_image).count();
@@ -105,8 +104,9 @@ impl App {
     }
 
     /// Switch the scene area to the kitty pixel renderer.
-    pub fn enable_kitty(&mut self) {
-        self.kitty = Some(KittyRenderer::new());
+    /// Enable the pixel renderer over `medium`.
+    pub fn enable_kitty(&mut self, medium: kitty::Medium) {
+        self.kitty = Some(KittyRenderer::with_medium(medium));
         self.kitty_dirty = true;
     }
 
@@ -136,8 +136,7 @@ impl App {
                         Action::None => {}
                     }
                     if action == Action::Reset {
-                        self.camera =
-                            Camera::from_target(self.initial_target, self.initial_radius);
+                        self.camera = Camera::from_target(self.initial_target, self.initial_radius);
                         self.viewport.reset();
                     }
                 }
@@ -199,9 +198,9 @@ impl App {
         &mut self,
         terminal: &mut Terminal<impl ratatui::backend::Backend + io::Write>,
     ) -> io::Result<()> {
-        let Some(renderer) = self.kitty.as_ref() else {
+        if self.kitty.is_none() {
             return Ok(());
-        };
+        }
         let size = terminal.size()?;
         let cols = size.width;
         let rows = size.height;
@@ -217,14 +216,33 @@ impl App {
         self.viewport.height = px_h as f64;
         self.kitty_px_per_row = px_h as f64 / scene_rows as f64;
         self.kitty_frame_px = Some((px_w as u32, px_h as u32));
-        if !self.kitty_dirty && self.kitty_placement == (cols, scene_rows) {
+        // A placement or pixel-size change remaps the cell grid: the
+        // stored placements refer to the old mapping, so delete them
+        // and restart the region state.
+        let mapping_changed = self.kitty_placement != (0, 0)
+            && (self.kitty_placement != (cols, scene_rows)
+                || self.kitty_frame_px != Some((px_w as u32, px_h as u32)));
+        if !self.kitty_dirty && !mapping_changed {
             return Ok(());
         }
         let cmds = self.viewport.render(&self.scene, &self.camera);
-        let seq = renderer.frame(&cmds, px_w, px_h, cols, scene_rows);
+        let seq = {
+            let renderer = self.kitty.as_mut().expect("kitty renderer");
+            if mapping_changed {
+                renderer.reset_placement_state();
+            }
+            renderer.frame(&cmds, px_w, px_h, cols, scene_rows, native.is_some())
+        };
         let backend = terminal.backend_mut();
-        crossterm::execute!(backend, crossterm::cursor::MoveTo(0, 0))?;
-        backend.write_all(&seq)?;
+        if mapping_changed {
+            backend.write_all(&kitty::encode_delete_all())?;
+        }
+        if !seq.is_empty() {
+            crossterm::execute!(backend, crossterm::cursor::MoveTo(0, 0))?;
+            backend.write_all(&seq)?;
+            // Restore the cursor position the next text pass expects.
+            crossterm::execute!(backend, crossterm::cursor::MoveTo(0, 0))?;
+        }
         std::io::Write::flush(backend)?;
         self.kitty_dirty = false;
         self.kitty_placement = (cols, scene_rows);
@@ -247,8 +265,13 @@ impl App {
     /// Draw a single frame (text layer).
     fn draw(&mut self, f: &mut ratatui::Frame) {
         let area = f.area();
-        let scene_rows = if area.height > 1 { area.height - 1 } else { area.height };
-        self.viewport.set_zoom_from_radius(self.camera.radius(), self.initial_radius);
+        let scene_rows = if area.height > 1 {
+            area.height - 1
+        } else {
+            area.height
+        };
+        self.viewport
+            .set_zoom_from_radius(self.camera.radius(), self.initial_radius);
 
         // Sync camera state to MCP server
         if let Some(ref mcp) = self.mcp_state {
@@ -269,14 +292,10 @@ impl App {
             // below it after this text pass (render_kitty_image).
             // First pass: compute the frame size now so the status
             // bar shows it without waiting for an event.
-            if self.kitty_frame_px.is_none()
-                && area.width >= 8
-                && scene_rows >= 4
-            {
+            if self.kitty_frame_px.is_none() && area.width >= 8 && scene_rows >= 4 {
                 let rows = scene_rows + 1;
                 let native = kitty::terminal_pixel_size();
-                let (px_w, px_h) =
-                    kitty::frame_pixel_size(area.width, rows, scene_rows, native);
+                let (px_w, px_h) = kitty::frame_pixel_size(area.width, rows, scene_rows, native);
                 self.kitty_frame_px = Some((px_w as u32, px_h as u32));
             }
         } else {
@@ -311,8 +330,13 @@ impl App {
                 theta_deg: self.camera.theta().to_degrees().rem_euclid(360.0),
                 phi_deg: self.camera.phi().to_degrees().rem_euclid(360.0),
                 radius: self.camera.radius(),
-                renderer: if self.kitty.is_some() { "kitty" } else { "half-block" },
+                renderer: if self.kitty.is_some() {
+                    "kitty"
+                } else {
+                    "half-block"
+                },
                 kitty_px: self.kitty_frame_px,
+                kitty_medium: self.kitty.as_ref().map(|r| r.medium_tag()),
                 sniped: self.nav_state.sniped,
             },
             layout[1],
@@ -322,7 +346,11 @@ impl App {
 
 /// Compute the axis-aligned bounding box of original (non-periodic) atoms.
 fn bounding_box_corners(scene: &Scene) -> ([f64; 3], [f64; 3]) {
-    let originals: Vec<_> = scene.atoms.iter().filter(|a| !a.is_periodic_image).collect();
+    let originals: Vec<_> = scene
+        .atoms
+        .iter()
+        .filter(|a| !a.is_periodic_image)
+        .collect();
     if originals.is_empty() {
         return ([0.0; 3], [0.0; 3]);
     }

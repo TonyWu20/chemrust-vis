@@ -43,6 +43,33 @@ pub const MAX_CHUNK: usize = 4096;
 /// id replaces the stored image (all old placements are deleted first).
 pub const IMAGE_ID: u32 = 1;
 
+/// Image id for the 1x1 black clear tile (content-box delta path).
+pub const BLACK_TILE_ID: u32 = 2;
+
+/// The pixel-data transmission medium for frame images.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Medium {
+    /// POSIX shared memory (`t=s`). Local sessions only: the terminal
+    /// must read the segment on the same host.
+    Shm,
+    /// Raw base64 direct data (`t=d`, the spec default).
+    Base64,
+    /// Base64 with a zlib-compressed payload (`o=z`). For network
+    /// sessions where the pty carries the bytes over a link.
+    Base64Zlib,
+}
+
+impl Medium {
+    /// Short tag for the status bar readout.
+    pub fn tag(self) -> &'static str {
+        match self {
+            Medium::Shm => "shm",
+            Medium::Base64 => "b64",
+            Medium::Base64Zlib => "b64+z",
+        }
+    }
+}
+
 // ── Terminal detection ─────────────────────────────────────────────────────
 
 /// Detect whether the current terminal implements the kitty graphics
@@ -67,11 +94,7 @@ pub fn terminal_supports_kitty() -> bool {
 }
 
 /// Pure detection logic, split out for testing without touching env vars.
-pub fn detect_kitty(
-    term_program: Option<&str>,
-    term: Option<&str>,
-    has_kitty_pid: bool,
-) -> bool {
+pub fn detect_kitty(term_program: Option<&str>, term: Option<&str>, has_kitty_pid: bool) -> bool {
     if has_kitty_pid {
         return true;
     }
@@ -92,6 +115,48 @@ pub fn detect_kitty(
     false
 }
 
+/// Choose the transmission medium for a session.
+///
+/// Explicit choices win: `compress` selects the zlib base64 path,
+/// `allow_shm = false` forces plain base64. Otherwise:
+/// - an SSH session gets plain base64. Shared memory does not cross
+///   hosts: the terminal reads the segment locally, the app writes it
+///   on the remote side.
+/// - a local session on a known kitty-protocol terminal (kitty,
+///   WezTerm, Ghostty) gets shared memory.
+/// - anything else gets plain base64.
+pub fn select_medium(
+    compress: bool,
+    allow_shm: bool,
+    ssh: bool,
+    local_known_terminal: bool,
+) -> Medium {
+    if compress {
+        return Medium::Base64Zlib;
+    }
+    if !allow_shm {
+        return Medium::Base64;
+    }
+    if ssh || !local_known_terminal {
+        return Medium::Base64;
+    }
+    Medium::Shm
+}
+
+/// Read the environment and pick a medium.
+///
+/// `SSH_CLIENT` / `SSH_TTY` mark a remote shell. `KITTY_PID` is set
+/// only by kitty; the `TERM_PROGRAM` / `TERM` signals cover WezTerm
+/// and Ghostty.
+pub fn select_medium_env(compress: bool, allow_shm: bool) -> Medium {
+    let ssh = std::env::var_os("SSH_CLIENT").is_some() || std::env::var_os("SSH_TTY").is_some();
+    let has_kitty_pid = std::env::var_os("KITTY_PID").is_some();
+    let term_program = std::env::var("TERM_PROGRAM").ok();
+    let term = std::env::var("TERM").ok();
+    let local_known =
+        has_kitty_pid || detect_kitty(term_program.as_deref(), term.as_deref(), false);
+    select_medium(compress, allow_shm, ssh, local_known)
+}
 
 // ── Native pixel size ────────────────────────────────────────────
 
@@ -104,7 +169,7 @@ pub fn detect_kitty(
 /// px-per-cell grid.
 #[cfg(unix)]
 pub fn terminal_pixel_size() -> Option<(u32, u32)> {
-    use libc::{ioctl, winsize, TIOCGWINSZ, STDOUT_FILENO};
+    use libc::{ioctl, winsize, STDOUT_FILENO, TIOCGWINSZ};
 
     let mut ws: winsize = unsafe { std::mem::zeroed() };
     let ok = unsafe { ioctl(STDOUT_FILENO, TIOCGWINSZ, &mut ws) };
@@ -172,8 +237,7 @@ pub fn frame_pixel_size(
 // ── Base64 ──────────────────────────────────────────────────────────────────
 
 /// Standard base64 alphabet.
-const B64_ALPHABET: [u8; 64] =
-    *b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+const B64_ALPHABET: [u8; 64] = *b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 /// Base64 encode a byte slice (standard alphabet, `=` padding).
 ///
@@ -229,14 +293,49 @@ pub fn encode_transmission_rgb(
 /// no protocol bytes are written back on stdin (see the module docs).
 pub fn encode_transmission(bytes: &[u8], width: u32, height: u32, image_id: u32) -> Vec<u8> {
     let b64 = base64_encode(bytes);
+    let control = format!("i={image_id},f=24,s={width},v={height},q=1");
+    encode_control_with_payload(&control, &b64)
+}
+
+/// Encode raw RGB bytes as a base64 transmission with a
+/// zlib-compressed payload (`o=z`).
+///
+/// `S=` carries the original (uncompressed) byte size, per spec. The
+/// terminal inflates before the base64 decode. `q=1` as always.
+pub fn encode_transmission_zlib(
+    pixels: &[[u8; 3]],
+    width: u32,
+    height: u32,
+    image_id: u32,
+) -> Vec<u8> {
+    use flate2::write::ZlibEncoder;
+    use flate2::Compression;
+
+    let raw: Vec<u8> = pixels.iter().flat_map(|p| p.iter().copied()).collect();
+    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::new(3));
+    std::io::Write::write_all(&mut encoder, &raw).expect("zlib encoder");
+    let compressed = encoder.finish().expect("zlib finish");
+
+    let control = format!(
+        "i={image_id},f=24,s={width},v={height},o=z,q=1,S={}",
+        raw.len()
+    );
+    let b64 = base64_encode(&compressed);
+    encode_control_with_payload(&control, &b64)
+}
+
+/// Chunk a base64 payload under a control-data string.
+///
+/// The first chunk carries the control data plus `m=1` (or `m=0` when
+/// it is the only chunk); later chunks carry only `m`. Shared by the
+/// raw-base64 and zlib-base64 encoders.
+fn encode_control_with_payload(control: &str, b64: &str) -> Vec<u8> {
     let total = b64.len().div_ceil(MAX_CHUNK).max(1);
     let mut out = Vec::with_capacity(b64.len() + 64 * total + 64);
     for (i, chunk) in b64.as_bytes().chunks(MAX_CHUNK).enumerate() {
         let m = if i + 1 < total { 1 } else { 0 };
         if i == 0 {
-            out.extend_from_slice(
-                format!("\x1b_Gi={image_id},f=24,s={width},v={height},q=1,m={m};").as_bytes(),
-            );
+            out.extend_from_slice(format!("\x1b_G{control},m={m};").as_bytes());
         } else {
             out.extend_from_slice(format!("\x1b_Gm={m};").as_bytes());
         }
@@ -255,6 +354,66 @@ pub fn encode_transmission(bytes: &[u8], width: u32, height: u32, image_id: u32)
 /// crossterm event reader as key events (see the module docs).
 pub fn encode_placement(image_id: u32, cols: u16, rows: u16) -> Vec<u8> {
     format!("\x1b_Ga=p,i={image_id},c={cols},r={rows},z=-1,C=1,q=1\x1b\\").into_bytes()
+}
+
+/// Encode a shared-memory transmission escape (`t=s`).
+///
+/// Creates a POSIX shared memory segment named
+/// `/chemrust-vis-tui-<pid>-<seq>` (spec: one leading slash, no
+/// other slashes) and fills it with the raw RGB bytes. The escape
+/// carries the segment name base64-encoded; `S=` is the byte size.
+///
+/// The terminal reads the segment and unlinks it. The creator must
+/// not unlink, so the handle is dropped as a non-owner: the drop
+/// unmaps and closes, but the segment survives until the terminal
+/// unlinks it.
+pub fn encode_transmission_shm(
+    pixels: &[[u8; 3]],
+    width: u32,
+    height: u32,
+    image_id: u32,
+    seq: u64,
+) -> Result<Vec<u8>, shared_memory::ShmemError> {
+    let bytes: Vec<u8> = pixels.iter().flat_map(|p| p.iter().copied()).collect();
+    let name = format!("/chemrust-vis-tui-{}-{}", std::process::id(), seq);
+    let mut shm = shared_memory::ShmemConf::new()
+        .os_id(&name)
+        .size(bytes.len())
+        .create()?;
+    // The terminal unlinks after reading; a creator unlink on drop
+    // could race the terminal's map.
+    shm.set_owner(false);
+    unsafe {
+        std::slice::from_raw_parts_mut(shm.as_ptr(), bytes.len()).copy_from_slice(&bytes);
+    }
+    let os_id = shm.get_os_id().to_string();
+    let payload = base64_encode(os_id.as_bytes());
+    let mut out = format!(
+        "\x1b_Gi={image_id},f=24,s={width},v={height},q=1,t=s,S={};{payload}\x1b\\",
+        bytes.len()
+    )
+    .into_bytes();
+    // The handle unmaps on drop; the segment itself persists for
+    // the terminal to read and unlink.
+    drop(shm);
+    Ok(out)
+}
+
+/// Encode the 1x1 black clear tile (image id [`BLACK_TILE_ID`]).
+///
+/// The terminal scales the 3-byte image to the placement rectangle,
+/// so one tile clears a region of any size. Always sent base64: the
+/// bytes do not justify shared memory.
+pub fn encode_black_tile() -> Vec<u8> {
+    encode_transmission_rgb(&[[0, 0, 0]], 1, 1, BLACK_TILE_ID)
+}
+
+/// Cursor move to cell (col, row), 0-based as in crossterm.
+///
+/// Placements happen at the cursor position, so region placements
+/// move the cursor first.
+pub fn encode_move_to(col: u16, row: u16) -> Vec<u8> {
+    format!("\x1b[{};{}H", row + 1, col + 1).into_bytes()
 }
 
 /// Encode the delete action that removes all visible placements.
@@ -304,36 +463,327 @@ pub fn rasterize(cmds: &DrawCommands, px_w: usize, px_h: usize) -> Vec<[u8; 3]> 
     buf
 }
 
+/// Rasterize draw commands into an RGB buffer of `rw` x `rh`, with
+/// canvas coordinates translated by (-ox, -oy).
+///
+/// The content-box delta path: only the region's pixels are touched,
+/// so the cost is proportional to the region area, not the canvas.
+pub fn rasterize_region(
+    cmds: &DrawCommands,
+    ox: f64,
+    oy: f64,
+    rw: usize,
+    rh: usize,
+) -> Vec<[u8; 3]> {
+    let mut buf = vec![[0u8; 3]; rw * rh];
+    for line in &cmds.lines {
+        sixel::draw_line_px(
+            &mut buf,
+            rw,
+            rh,
+            line.x1 - ox,
+            line.y1 - oy,
+            line.x2 - ox,
+            line.y2 - oy,
+            [140, 140, 140],
+        );
+    }
+    for pt in &cmds.points {
+        let r = pt.radius.max(2.0);
+        sixel::fill_circle_px(
+            &mut buf,
+            rw,
+            rh,
+            pt.x - ox,
+            pt.y - oy,
+            r,
+            [pt.color.0, pt.color.1, pt.color.2],
+        );
+    }
+    buf
+}
+
+/// The content bounding box in canvas pixel coordinates, padded by 1
+/// pixel and clamped to the canvas.
+///
+/// Points contribute their shaded radius, lines their endpoints.
+/// `None` when there is no content.
+pub fn content_bbox(cmds: &DrawCommands, px_w: u32, px_h: u32) -> Option<(i32, i32, i32, i32)> {
+    let (mut min_x, mut max_x) = (f64::INFINITY, f64::NEG_INFINITY);
+    let (mut min_y, mut max_y) = (f64::INFINITY, f64::NEG_INFINITY);
+    for pt in &cmds.points {
+        let r = pt.radius.max(2.0);
+        min_x = min_x.min(pt.x - r);
+        max_x = max_x.max(pt.x + r);
+        min_y = min_y.min(pt.y - r);
+        max_y = max_y.max(pt.y + r);
+    }
+    for line in &cmds.lines {
+        min_x = min_x.min(line.x1).min(line.x2);
+        max_x = max_x.max(line.x1).max(line.x2);
+        min_y = min_y.min(line.y1).min(line.y2);
+        max_y = max_y.max(line.y1).max(line.y2);
+    }
+    if !min_x.is_finite() {
+        return None;
+    }
+    let x0 = (min_x - 1.0).max(0.0).floor() as i32;
+    let x1 = (max_x + 1.0).min(f64::from(px_w)).ceil() as i32;
+    let y0 = (min_y - 1.0).max(0.0).floor() as i32;
+    let y1 = (max_y + 1.0).min(f64::from(px_h)).ceil() as i32;
+    if x1 <= x0 || y1 <= y0 {
+        return None;
+    }
+    Some((x0, y0, x1 - x0, y1 - y0))
+}
+
+/// Map a content region in canvas pixels to a cell rectangle,
+/// rounded outward.
+///
+/// The canvas of `px_w` x `px_h` pixels maps onto `cols` x
+/// `scene_rows` cells. Returns (c0, r0, c, r).
+pub fn region_to_cells(
+    ox: i32,
+    oy: i32,
+    rw: i32,
+    rh: i32,
+    px_w: u32,
+    px_h: u32,
+    cols: u16,
+    scene_rows: u16,
+) -> (u16, u16, u16, u16) {
+    let ppc = f64::from(px_w) / f64::from(cols.max(1));
+    let ppr = f64::from(px_h) / f64::from(scene_rows.max(1));
+    let c0 = ((f64::from(ox) / ppc).floor().max(0.0)) as u16;
+    let c1 = ((f64::from(ox + rw) / ppc).ceil().min(f64::from(cols))) as u16;
+    let r0 = ((f64::from(oy) / ppr).floor().max(0.0)) as u16;
+    let r1 = ((f64::from(oy + rh) / ppr).ceil().min(f64::from(scene_rows))) as u16;
+    let c = c1.saturating_sub(c0).max(1);
+    let r = r1.saturating_sub(r0).max(1);
+    (c0, r0, c, r)
+}
+
+/// Whether the old cell rectangle needs a black-tile clear before
+/// placing the new one: when the new rectangle does not fully
+/// contain the old one.
+///
+/// Rectangles are (c0, r0, c, r).
+pub fn should_clear(new: (u16, u16, u16, u16), old: (u16, u16, u16, u16)) -> bool {
+    let (nc0, nr0, nc, nr) = new;
+    let (oc0, or0, oc, orr) = old;
+    !(nc0 <= oc0 && nr0 <= or0 && nc0 + nc >= oc0 + oc && nr0 + nr >= or0 + orr)
+}
+
 // ── Renderer state ──────────────────────────────────────────────────────────
 
 /// Interactive renderer: produces the full escape sequence for one frame.
 pub struct KittyRenderer {
     image_id: u32,
+    medium: Medium,
+    /// A shared-memory create failed this session; the effective
+    /// medium dropped to plain base64.
+    shm_failed: bool,
+    /// The 1x1 black tile was transmitted this session.
+    black_sent: bool,
+    /// The cell rectangle (c0, r0, c, r) of the last placed content
+    /// image, or of the full canvas when the last frame was full.
+    last_rect: Option<(u16, u16, u16, u16)>,
+    /// Sequence number for shared-memory segment names.
+    shm_seq: u64,
 }
+
+/// The content region covers this share of the canvas before the
+/// crop path gives up and sends the full canvas instead.
+const CROP_AREA_LIMIT: u32 = 95;
 
 impl KittyRenderer {
     pub fn new() -> Self {
-        KittyRenderer { image_id: IMAGE_ID }
+        KittyRenderer {
+            image_id: IMAGE_ID,
+            medium: Medium::Base64,
+            shm_failed: false,
+            black_sent: false,
+            last_rect: None,
+            shm_seq: 0,
+        }
     }
 
-    /// Build the transmit + placement sequence for one frame.
+    /// Create a renderer that transmits pixel data over `medium`.
+    pub fn with_medium(medium: Medium) -> Self {
+        KittyRenderer {
+            medium,
+            ..Self::new()
+        }
+    }
+
+    /// The medium in effect for status-bar display.
+    pub fn medium_tag(&self) -> &'static str {
+        self.effective_medium().tag()
+    }
+
+    /// Drop placement state after a delete-all (terminal resize,
+    /// frame-size change). The black tile is re-sent on demand.
+    pub fn reset_placement_state(&mut self) {
+        self.last_rect = None;
+        self.black_sent = false;
+    }
+
+    fn effective_medium(&self) -> Medium {
+        if self.medium == Medium::Shm && self.shm_failed {
+            Medium::Base64
+        } else {
+            self.medium
+        }
+    }
+
+    /// Build the frame sequence: an optional black-tile clear of the
+    /// old cell rectangle, the content transmission, and the
+    /// placement.
     ///
-    /// The caller writes the bytes after moving the terminal cursor to
-    /// the top-left corner of the scene area.
+    /// The caller writes the bytes with the cursor at the top-left of
+    /// the scene area. `crop_ok` enables the content-box delta path:
+    /// rasterize only the content's cell rectangle and clear the old
+    /// one with the black tile. It needs the native pixel mapping
+    /// (cell sizes in pixels are known); without it the full canvas
+    /// is sent.
+    ///
+    /// An empty scene with no live placement produces an empty
+    /// sequence: nothing changes, nothing is sent.
     pub fn frame(
-        &self,
+        &mut self,
         cmds: &DrawCommands,
         px_w: usize,
         px_h: usize,
         cols: u16,
-        rows: u16,
+        scene_rows: u16,
+        crop_ok: bool,
     ) -> Vec<u8> {
-        let pixels = rasterize(cmds, px_w, px_h);
-        let mut out =
-            encode_transmission_rgb(&pixels, px_w as u32, px_h as u32, self.image_id);
-        out.extend(encode_placement(self.image_id, cols, rows));
+        let full = (0u16, 0u16, cols, scene_rows);
+        let plan = if crop_ok {
+            match content_bbox(cmds, px_w as u32, px_h as u32) {
+                Some((ox, oy, rw, rh)) => {
+                    let rect =
+                        region_to_cells(ox, oy, rw, rh, px_w as u32, px_h as u32, cols, scene_rows);
+                    let area = u32::from(rect.2) * u32::from(rect.3);
+                    let full_area = u32::from(cols) * u32::from(scene_rows);
+                    if full_area > 0 && area * 100 >= full_area * CROP_AREA_LIMIT {
+                        FramePlan::Full
+                    } else {
+                        FramePlan::Region(rect)
+                    }
+                }
+                None => FramePlan::Empty,
+            }
+        } else {
+            FramePlan::Full
+        };
+
+        let mut out = Vec::new();
+        match plan {
+            FramePlan::Empty => {
+                if self.last_rect.is_some() {
+                    out.extend(self.clear_escapes());
+                    self.last_rect = None;
+                }
+            }
+            FramePlan::Full => {
+                // The full-canvas image is opaque black in the
+                // content-free areas: it covers any old rectangle.
+                // The clear still runs on a region-to-full
+                // transition: the old placement re-renders the
+                // replaced image data until the new placement lands.
+                if self.last_rect.is_some() && self.last_rect != Some(full) {
+                    out.extend(self.clear_escapes());
+                }
+                let pixels = rasterize(cmds, px_w, px_h);
+                self.transmit(&mut out, &pixels, px_w, px_h);
+                out.extend(encode_placement(self.image_id, cols, scene_rows));
+                self.last_rect = Some(full);
+            }
+            FramePlan::Region(rect) => {
+                if let Some(old) = self.last_rect {
+                    if should_clear(rect, old) {
+                        out.extend(self.clear_escapes());
+                    }
+                }
+                let (c0, r0, c, r) = rect;
+                let ppc = px_w as f64 / f64::from(cols.max(1));
+                let ppr = px_h as f64 / f64::from(scene_rows.max(1));
+                let rw = (f64::from(c) * ppc).round().max(1.0) as usize;
+                let rh = (f64::from(r) * ppr).round().max(1.0) as usize;
+                let ox = f64::from(c0) * ppc;
+                let oy = f64::from(r0) * ppr;
+                let pixels = rasterize_region(cmds, ox, oy, rw, rh);
+                self.transmit(&mut out, &pixels, rw, rh);
+                out.extend(encode_move_to(c0, r0));
+                out.extend(encode_placement(self.image_id, c, r));
+                self.last_rect = Some(rect);
+            }
+        }
         out
     }
+
+    /// Black-tile clear of the last placed rectangle: the tile
+    /// transmission (once) and its placement over the old rectangle.
+    fn clear_escapes(&mut self) -> Vec<u8> {
+        let (c0, r0, c, r) = self.last_rect.expect("called with a live rectangle");
+        let mut out = Vec::new();
+        if !self.black_sent {
+            out.extend(encode_black_tile());
+            self.black_sent = true;
+        }
+        out.extend(encode_move_to(c0, r0));
+        out.extend(encode_placement(BLACK_TILE_ID, c, r));
+        out
+    }
+
+    /// Append the pixel-data transmission in the effective medium.
+    ///
+    /// A shared-memory create failure downgrades the session to
+    /// plain base64 for the rest of the run.
+    fn transmit(&mut self, out: &mut Vec<u8>, pixels: &[[u8; 3]], w: usize, h: usize) {
+        match self.effective_medium() {
+            Medium::Shm => {
+                self.shm_seq += 1;
+                match encode_transmission_shm(
+                    pixels,
+                    w as u32,
+                    h as u32,
+                    self.image_id,
+                    self.shm_seq,
+                ) {
+                    Ok(seq) => out.extend(seq),
+                    Err(_) => {
+                        self.shm_failed = true;
+                        let raw: Vec<u8> = pixels.iter().flat_map(|p| p.iter().copied()).collect();
+                        out.extend(encode_transmission(&raw, w as u32, h as u32, self.image_id));
+                    }
+                }
+            }
+            Medium::Base64 => {
+                let raw: Vec<u8> = pixels.iter().flat_map(|p| p.iter().copied()).collect();
+                out.extend(encode_transmission(&raw, w as u32, h as u32, self.image_id));
+            }
+            Medium::Base64Zlib => {
+                out.extend(encode_transmission_zlib(
+                    pixels,
+                    w as u32,
+                    h as u32,
+                    self.image_id,
+                ));
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum FramePlan {
+    /// No content: clear the live rectangle if any, send nothing.
+    Empty,
+    /// Rasterize and place the full canvas.
+    Full,
+    /// Rasterize and place the content's cell rectangle.
+    Region((u16, u16, u16, u16)),
 }
 
 impl Default for KittyRenderer {
@@ -427,8 +877,16 @@ mod tests {
         assert_eq!(escs.len(), 2);
         assert_eq!(escs[0].0, "i=1,f=24,s=1333,v=3,q=1,m=1");
         assert_eq!(escs[1].0, "m=0");
-        assert_eq!(escs[0].1.len(), MAX_CHUNK, "non-final chunk fills MAX_CHUNK");
-        assert_eq!(escs[0].1.len() % 4, 0, "non-final chunks are 4-byte aligned");
+        assert_eq!(
+            escs[0].1.len(),
+            MAX_CHUNK,
+            "non-final chunk fills MAX_CHUNK"
+        );
+        assert_eq!(
+            escs[0].1.len() % 4,
+            0,
+            "non-final chunks are 4-byte aligned"
+        );
         assert_eq!(escs[1].1.len(), 1240);
         // Concatenated payload decodes back to the original bytes.
         let joined = format!("{}{}", escs[0].1, escs[1].1);
@@ -499,7 +957,11 @@ mod tests {
         assert!(detect_kitty(Some("GHOSTTY"), None, false));
         assert!(detect_kitty(None, Some("xterm-ghostty"), false));
         assert!(detect_kitty(None, Some("WezTerm"), false));
-        assert!(!detect_kitty(Some("iTerm.app"), Some("xterm-256color"), false));
+        assert!(!detect_kitty(
+            Some("iTerm.app"),
+            Some("xterm-256color"),
+            false
+        ));
         assert!(!detect_kitty(None, Some("xterm-256color"), false));
         assert!(!detect_kitty(None, None, false));
     }
@@ -537,14 +999,266 @@ mod tests {
 
     #[test]
     fn frame_is_transmission_plus_placement() {
-        let r = KittyRenderer::new();
-        let cmds = DrawCommands { points: vec![], lines: vec![] };
-        let seq = r.frame(&cmds, 2, 2, 10, 5);
+        let mut r = KittyRenderer::new();
+        let cmds = DrawCommands {
+            points: vec![],
+            lines: vec![],
+        };
+        let seq = r.frame(&cmds, 2, 2, 10, 5, false);
         let escs = split_escapes(&seq);
         assert_eq!(escs.len(), 2, "single-chunk transmission + placement");
-        assert!(escs[1].0.starts_with("a=p,i=1,"), "second escape is a placement");
+        assert!(
+            escs[1].0.starts_with("a=p,i=1,"),
+            "second escape is a placement"
+        );
         assert!(escs[1].0.contains("c=10"), "placement width");
         assert!(escs[1].0.contains("r=5"), "placement height");
+    }
+
+    fn test_point(x: f64, y: f64, r: f64) -> DrawCommands {
+        use chemrust_vis_core::scene::RgbColor;
+        use chemrust_vis_core::viewport::DrawPoint;
+        DrawCommands {
+            points: vec![DrawPoint {
+                x,
+                y,
+                z_view: 0.0,
+                radius: r,
+                color: RgbColor(255, 0, 0),
+                atom_index: 0,
+            }],
+            lines: vec![],
+        }
+    }
+
+    #[test]
+    fn medium_tags() {
+        assert_eq!(Medium::Shm.tag(), "shm");
+        assert_eq!(Medium::Base64.tag(), "b64");
+        assert_eq!(Medium::Base64Zlib.tag(), "b64+z");
+    }
+
+    #[test]
+    fn select_medium_rules() {
+        // Explicit choices.
+        assert_eq!(select_medium(true, true, false, true), Medium::Base64Zlib);
+        assert_eq!(select_medium(false, false, false, true), Medium::Base64);
+        assert_eq!(select_medium(true, false, true, false), Medium::Base64Zlib);
+        // SSH: no shared memory across hosts.
+        assert_eq!(select_medium(false, true, true, true), Medium::Base64);
+        // Local known terminal: shared memory.
+        assert_eq!(select_medium(false, true, false, true), Medium::Shm);
+        // Local unknown terminal: base64.
+        assert_eq!(select_medium(false, true, false, false), Medium::Base64);
+    }
+
+    #[test]
+    fn content_bbox_point_and_line() {
+        use chemrust_vis_core::scene::RgbColor;
+        use chemrust_vis_core::viewport::{DrawCommands, DrawLine, DrawPoint};
+        let cmds = DrawCommands {
+            points: vec![DrawPoint {
+                x: 50.0,
+                y: 40.0,
+                z_view: 0.0,
+                radius: 5.0,
+                color: RgbColor(255, 0, 0),
+                atom_index: 0,
+            }],
+            lines: vec![DrawLine {
+                x1: 10.0,
+                y1: 10.0,
+                x2: 90.0,
+                y2: 10.0,
+            }],
+        };
+        // Point: 50/40 +- 5, plus the 1 pixel pad. Line: 10..90,
+        // 10..10, plus pad. Union: x 9..91, y 9..46.
+        assert_eq!(content_bbox(&cmds, 200, 100), Some((9, 9, 82, 37)));
+        // Clamping at the canvas edge.
+        let edge = DrawCommands {
+            points: vec![DrawPoint {
+                x: 200.0,
+                y: 0.0,
+                z_view: 0.0,
+                radius: 10.0,
+                color: RgbColor(255, 0, 0),
+                atom_index: 0,
+            }],
+            lines: vec![],
+        };
+        assert_eq!(content_bbox(&edge, 200, 100), Some((189, 0, 11, 11)));
+    }
+
+    #[test]
+    fn content_bbox_empty() {
+        let cmds = DrawCommands {
+            points: vec![],
+            lines: vec![],
+        };
+        assert_eq!(content_bbox(&cmds, 100, 100), None);
+    }
+
+    #[test]
+    fn region_to_cells_rounds_outward() {
+        // A 100x50 canvas on 10x5 cells: 10 px per cell and row.
+        assert_eq!(region_to_cells(11, 11, 8, 8, 100, 50, 10, 5), (1, 1, 1, 1));
+        // Touching a cell boundary at x=10 rounds into cell 1.
+        assert_eq!(region_to_cells(10, 0, 1, 50, 100, 50, 10, 5), (1, 0, 1, 5));
+        // A full-canvas region maps to the full grid.
+        assert_eq!(
+            region_to_cells(0, 0, 100, 50, 100, 50, 10, 5),
+            (0, 0, 10, 5)
+        );
+    }
+
+    #[test]
+    fn should_clear_containment() {
+        // Old inside new: no clear.
+        assert!(!should_clear((2, 2, 8, 8), (4, 4, 4, 4)));
+        // New inside old: clear.
+        assert!(should_clear((4, 4, 4, 4), (2, 2, 8, 8)));
+        // Disjoint: clear.
+        assert!(should_clear((0, 0, 20, 10), (40, 10, 5, 5)));
+        // The full canvas contains any old rectangle: no clear.
+        assert!(!should_clear((0, 0, 80, 24), (40, 10, 5, 5)));
+        // Identical: no clear.
+        assert!(!should_clear((3, 2, 5, 5), (3, 2, 5, 5)));
+    }
+
+    #[test]
+    fn rasterize_region_offsets_coords() {
+        let cmds = test_point(10.0, 8.0, 2.0);
+        let buf = rasterize_region(&cmds, 8.0, 4.0, 12, 10);
+        // The sphere center lands at buffer (2, 4).
+        assert!(buf[4 * 12 + 2][0] > 100, "center is red");
+        // A far corner stays black.
+        assert_eq!(buf[0 * 12 + 0], [0, 0, 0]);
+    }
+
+    #[test]
+    fn black_tile_bytes() {
+        let seq = encode_black_tile();
+        let escs = split_escapes(&seq);
+        assert_eq!(escs.len(), 1);
+        assert_eq!(escs[0].0, "i=2,f=24,s=1,v=1,q=1,m=0");
+        assert_eq!(base64_decode(&escs[0].1), Some(vec![0, 0, 0]));
+    }
+
+    #[test]
+    fn move_to_bytes() {
+        assert_eq!(encode_move_to(3, 5), b"\x1b[6;4H");
+    }
+
+    #[test]
+    fn transmission_zlib_round_trip() {
+        use flate2::read::ZlibDecoder;
+        use std::io::Read;
+        let pixels: Vec<[u8; 3]> = (0..500u32).map(|i| [(i % 256) as u8, 0, 0]).collect();
+        let seq = encode_transmission_zlib(&pixels, 500, 1, 1);
+        let escs = split_escapes(&seq);
+        assert!(escs[0].0.contains("o=z"), "control has o=z");
+        assert!(escs[0].0.contains("S=1500"), "S is the raw byte count");
+        assert!(escs[0].0.contains("q=1"), "responses stay suppressed");
+        let joined: String = escs.iter().map(|e| e.1.as_str()).collect();
+        eprintln!("escs: {} joined len: {}", escs.len(), joined.len());
+        let expected_b64 = {
+            use flate2::write::ZlibEncoder;
+            use flate2::Compression;
+            let raw: Vec<u8> = pixels.iter().flat_map(|p| p.iter().copied()).collect();
+            let mut enc = ZlibEncoder::new(Vec::new(), Compression::new(3));
+            std::io::Write::write_all(&mut enc, &raw).unwrap();
+            let comp = enc.finish().unwrap();
+            eprintln!("compressed len: {}", comp.len());
+            base64_encode(&comp)
+        };
+        eprintln!("joined == expected: {}", joined == expected_b64);
+        eprintln!("first 40 joined: {}", &joined[..joined.len().min(40)]);
+        eprintln!(
+            "first 40 expected: {}",
+            &expected_b64[..expected_b64.len().min(40)]
+        );
+        let compressed = base64_decode(&joined).expect("payload decodes");
+        let mut dec = ZlibDecoder::new(compressed.as_slice());
+        let mut out = Vec::new();
+        dec.read_to_end(&mut out).expect("zlib inflate");
+        let raw: Vec<u8> = pixels.iter().flat_map(|p| p.iter().copied()).collect();
+        assert_eq!(out, raw, "zlib payload round-trips to the raw RGB");
+    }
+
+    #[test]
+    fn frame_region_plan_clears_old_rect() {
+        let mut r = KittyRenderer::new();
+        let seq_a = r.frame(&test_point(10.0, 10.0, 2.0), 200, 100, 10, 5, true);
+        let escs_a = split_escapes(&seq_a);
+        assert!(
+            escs_a.iter().all(|e| !e.0.starts_with("i=2,")),
+            "first frame has no black tile"
+        );
+        // Move the content: the old rectangle must be cleared first.
+        let seq_b = r.frame(&test_point(150.0, 80.0, 2.0), 200, 100, 10, 5, true);
+        let escs_b = split_escapes(&seq_b);
+        assert!(escs_b[0].0.starts_with("i=2,"), "tile transmitted first");
+        assert!(
+            escs_b.iter().any(|e| e.0.starts_with("a=p,i=2,")),
+            "tile placed over the old rectangle"
+        );
+        assert!(
+            escs_b.iter().any(|e| e.0.starts_with("i=1,")),
+            "content transmitted"
+        );
+        // Same region again: contained, nothing new is sent.
+        let seq_c = r.frame(&test_point(150.0, 80.0, 2.0), 200, 100, 10, 5, true);
+        let escs_c = split_escapes(&seq_c);
+        assert!(
+            escs_c.iter().all(|e| !e.0.starts_with("i=2,")),
+            "tile is sent once"
+        );
+        assert_eq!(escs_c.len(), 2, "content transmission + placement only");
+    }
+
+    #[test]
+    fn frame_empty_scene_clears_live_rect() {
+        let mut r = KittyRenderer::new();
+        let _ = r.frame(&test_point(10.0, 10.0, 2.0), 200, 100, 10, 5, true);
+        let empty = DrawCommands {
+            points: vec![],
+            lines: vec![],
+        };
+        let seq = r.frame(&empty, 200, 100, 10, 5, true);
+        let escs = split_escapes(&seq);
+        assert!(escs.iter().any(|e| e.0.starts_with("i=2,")), "tile sent");
+        assert!(
+            escs.iter().any(|e| e.0.starts_with("a=p,i=2,")),
+            "tile placed over the old rectangle"
+        );
+        assert!(
+            escs.iter().all(|e| !e.0.starts_with("i=1,")),
+            "no content transmission"
+        );
+        // Second empty frame: the rectangle is gone, nothing is sent.
+        let seq2 = r.frame(&empty, 200, 100, 10, 5, true);
+        assert!(seq2.is_empty(), "no sequence for a second empty frame");
+    }
+
+    #[test]
+    fn frame_full_plan_after_region_clears_full_canvas() {
+        let mut r = KittyRenderer::new();
+        let _ = r.frame(&test_point(10.0, 10.0, 2.0), 200, 100, 10, 5, true);
+        // A dense scene forces the full-canvas plan; the live region
+        // must be covered, which the opaque full canvas does on its
+        // own, but the transition still clears the old rectangle.
+        let dense = test_point(100.0, 50.0, 90.0);
+        let seq = r.frame(&dense, 200, 100, 10, 5, true);
+        let escs = split_escapes(&seq);
+        assert!(
+            escs.iter().any(|e| e.0.starts_with("a=p,i=2,")),
+            "black tile covers the old region"
+        );
+        assert!(
+            escs.iter().any(|e| e.0.contains("c=10")),
+            "full-canvas placement"
+        );
     }
 
     #[test]

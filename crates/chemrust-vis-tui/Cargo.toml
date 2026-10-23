@@ -21,3 +21,8 @@ serde_json = "1"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+# Kitty transmission media: local shared memory (t=s) and zlib
+# compression of the base64 path (o=z) for network sessions.
+shared_memory = "0.12"
+flate2 = "1"

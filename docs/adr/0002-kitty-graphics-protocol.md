@@ -264,6 +264,81 @@ Consequences:
   (the 0.5x of 480x920) and showed `kitty 240×460px`. Zero-pixel
   ptys and pipes fell back to 2x4 as designed.
 
+## Amendment (2026-10-24, fifth)
+
+Transmission media and frame content.
+
+- Pixel data now travels over a session-dependent medium. A local
+  session on a known kitty-protocol terminal uses POSIX shared
+  memory (`t=s`): kitty through `KITTY_PID`, WezTerm and Ghostty
+  through `TERM_PROGRAM` / `TERM`. SSH sessions (`SSH_CLIENT` or
+  `SSH_TTY` set) use plain base64, because the terminal reads the
+  segment locally while the app writes it on the remote host.
+  Unknown local terminals also use plain base64.
+- `--kitty-compress` selects the zlib-compressed base64 path
+  (`o=z`, `S=` carries the raw size). `--no-kitty-shm` forces plain
+  base64. Both apply on top of the medium choice; an explicit
+  choice wins.
+- Shared memory is created with the `shared_memory` crate under the
+  name `/chemrust-vis-tui-<pid>-<seq>` (one leading slash, no
+  other slashes, 0600 permissions). The crate unlinks the segment
+  when its handle is the owner. The renderer therefore drops the
+  handle as a non-owner (`set_owner(false)`) so the segment
+  survives until the terminal unlinks it after reading, as the
+  spec assigns.
+- A failed segment create (for example a full `/dev/shm`) drops
+  the session to plain base64 for the rest of the run. The status
+  bar shows the effective medium, so the downgrade is visible.
+- The 1x1 black clear tile always travels base64. Three bytes do
+  not justify a segment.
+
+The animation protocol (`a=f` / `a=a` / `a=c`) is not used.
+Rationale: the renderer replaces its content every frame and skips
+re-transmit on static views, so the terminal-side frame cache buys
+nothing. The pixel economy the animation path offers comes from
+sending only the changed regions, which plain placements achieve
+portably:
+
+- When the native pixel mapping is available, the frame crops to
+  the scene content's cell rectangle: the bounding box of the
+  drawn points and lines, padded one pixel and rounded outward to
+  cell boundaries. A region that covers 95% or more of the canvas
+  falls back to the full canvas (`CROP_AREA_LIMIT`).
+- The previous rectangle clears with a one-pixel black tile
+  (image id 2, transmitted once) stretched over the old
+  rectangle. The clear runs when the new rectangle does not fully
+  contain the old one. A full-canvas image is opaque black in its
+  content-free areas, so a region-to-full transition also clears.
+- An empty scene sends nothing. It clears its live rectangle and
+  stops.
+- A terminal resize or a frame-pixel-size change remaps the cell
+  grid. The renderer deletes all placements and restarts its
+  region state.
+
+The status bar readout gains the medium: `kitty 480×230px shm`,
+`kitty 480×230px b64`, `kitty 480×230px b64+z`.
+
+Consequences:
+
+- Adds two dependencies to the TUI crate: `shared_memory` (0.12,
+  POSIX shared memory wrapper) and `flate2` (zlib, pure-Rust
+  miniz backend).
+- The base64 path is the universal fallback. `q=1` stays on every
+  transmit and placement, per the Ghostty feedback-loop lesson.
+- `o=z` is opt-in. kitty implements it. WezTerm and Ghostty are
+  unverified, so the default SSH medium stays plain base64.
+- Payload sizes at a 480x960 px pty, cropped region: ~150 B on the
+  wire over shared memory (the segment name), ~205 KB base64, ~18 KB
+  zlib base64. The uncropped 0.5x frame transmits ~430 KB
+  base64.
+
+Verification (forced pty, `TERM_PROGRAM=WezTerm`, 480x960 px):
+25 shared-memory frames produced 25 named segments and 3 black-tile
+clears during orbit keys. The base64 capture measured 205 KB and
+the `--kitty-compress` capture 18 KB. An `SSH_CLIENT` environment
+selected base64. An unknown terminal selected base64, and the
+auto path fell back to half-block. 97 unit tests pass.
+
 ## Accepted limits
 
 On 2026-10-13 the decider accepted the limits in the "Negative"

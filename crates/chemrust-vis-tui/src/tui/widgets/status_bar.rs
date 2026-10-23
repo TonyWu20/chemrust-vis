@@ -22,6 +22,9 @@ pub struct StatusBar {
     /// Last transmitted kitty frame size in pixels. `None` for the
     /// half-block renderer, or before the first kitty frame.
     pub kitty_px: Option<(u32, u32)>,
+    /// The kitty transmission medium ("shm", "b64", "b64+z"). `None`
+    /// for the half-block renderer.
+    pub kitty_medium: Option<&'static str>,
     /// Snipe mode active: orbit and move-zoom run at 1/10 sensitivity.
     pub sniped: bool,
 }
@@ -35,15 +38,14 @@ impl Widget for StatusBar {
             ),
             Span::raw(format!(
                 " | {} atoms | θ={:.0}° φ={:.0}° r={:.1} | {}",
-                self.atom_count,
-                self.theta_deg,
-                self.phi_deg,
-                self.radius,
-                self.renderer
+                self.atom_count, self.theta_deg, self.phi_deg, self.radius, self.renderer
             )),
         ];
         if let Some((w, h)) = self.kitty_px {
             spans.push(Span::raw(format!(" {w}\u{00d7}{h}px")));
+        }
+        if let Some(m) = self.kitty_medium {
+            spans.push(Span::raw(format!(" {m}")));
         }
         if self.sniped {
             spans.push(Span::raw(" | "));

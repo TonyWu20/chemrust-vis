@@ -201,12 +201,21 @@ switch to a versioned dependency.
   image places below the text layer (z-index -1), so the status bar and
   axis indicator stay readable. Re-transmits only on camera, viewport,
   or terminal-size change. One-shot `--kitty` prints a single frame.
+  The frame crops to the scene content's cell rectangle and clears
+  the old rectangle with a 1x1 black tile (fifth amendment).
+  Transmission medium follows the session: shared memory (`t=s`) on
+  local known terminals, plain base64 over SSH and on unknown
+  terminals, `--kitty-compress` for the zlib path (`o=z`), and
+  `--no-kitty-shm` to force base64. The status bar shows the
+  medium with the frame size.
   Terminal responses are suppressed with `q=1` so the protocol's
   `i=1;OK` replies cannot be parsed as key input and drive the camera
   (amendment 2026-10-14, ADR-0002). `=` is not a key binding.
   ADR-0001's rejection of the protocol for interactive use is superseded.
   The decider accepted the known limits of this choice on 2026-10-13.
   See the "Accepted limits" section of ADR-0002.
+  Transmission media, the content-box delta, and the medium flags
+  are recorded in ADR-0002, fifth amendment (2026-10-24).
 
 - **One-shot `--sixel` — removed 2026-10-14** — The flag, the sixel
   encoder, and the `CSI 8 t` pixel-size query are gone (the WezTerm

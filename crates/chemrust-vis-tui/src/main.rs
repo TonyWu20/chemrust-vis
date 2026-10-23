@@ -54,8 +54,17 @@ struct Cli {
     /// Render a single frame as a kitty image and exit (no TUI).
     #[arg(long)]
     kitty: bool,
-}
 
+    /// Compress the base64 frame payload with zlib (`o=z`). Enable on
+    /// terminals that implement it; kitty does.
+    #[arg(long)]
+    kitty_compress: bool,
+
+    /// Force plain base64 transmission, even on local known
+    /// terminals that would otherwise use shared memory.
+    #[arg(long)]
+    no_kitty_shm: bool,
+}
 
 /// Terminal size, falling back to 80x24 when the query fails or
 /// reports an empty pty.
@@ -88,12 +97,20 @@ struct TerminalGuard {
 impl TerminalGuard {
     /// Interactive TUI: alternate screen, mouse capture, raw mode.
     fn interactive(kitty: bool) -> Self {
-        Self { done: false, kitty, alt_screen: true }
+        Self {
+            done: false,
+            kitty,
+            alt_screen: true,
+        }
     }
 
     /// One-shot render: raw mode only, no alternate screen.
     fn one_shot(kitty: bool) -> Self {
-        Self { done: false, kitty, alt_screen: false }
+        Self {
+            done: false,
+            kitty,
+            alt_screen: false,
+        }
     }
 
     /// Run the teardown. Idempotent.
@@ -146,9 +163,9 @@ fn main() -> Result<()> {
     }
 
     if cli.kitty {
+        use crate::tui::{kitty, sixel};
         use chemrust_vis_core::camera::Camera;
         use chemrust_vis_core::viewport::Viewport;
-        use crate::tui::{kitty, sixel};
         use std::io::Write;
 
         let center = scene.center_for_view();
@@ -159,8 +176,13 @@ fn main() -> Result<()> {
         // One-shot grid: 12x24 px per cell. The transmit happens
         // once, so the multi-megabyte payload is acceptable here.
         let (w, h, pixels) = sixel::render_to_pixels(&cmds, cols as usize * 12, rows as usize * 24);
-        eprintln!("Rendered {}×{} pixels, {} atoms, {} edges",
-            w, h, cmds.points.len(), cmds.lines.len());
+        eprintln!(
+            "Rendered {}×{} pixels, {} atoms, {} edges",
+            w,
+            h,
+            cmds.points.len(),
+            cmds.lines.len()
+        );
         let seq = kitty::encode_transmission_rgb(&pixels, w as u32, h as u32, kitty::IMAGE_ID);
         let placement = kitty::encode_placement(kitty::IMAGE_ID, cols, rows.saturating_sub(1));
         eprintln!("Kitty data: {} bytes", seq.len() + placement.len());
@@ -180,7 +202,10 @@ fn main() -> Result<()> {
         eprint!("\r\nPress any key to exit...");
         let _ = crossterm::event::read();
         guard.finish();
-        execute!(std::io::stdout(), crossterm::terminal::Clear(crossterm::terminal::ClearType::All))?;
+        execute!(
+            std::io::stdout(),
+            crossterm::terminal::Clear(crossterm::terminal::ClearType::All)
+        )?;
         return Ok(());
     }
 
@@ -190,6 +215,7 @@ fn main() -> Result<()> {
         Renderer::Halfblock => false,
         Renderer::Kitty => true,
     };
+    let medium = tui::kitty::select_medium_env(cli.kitty_compress, !cli.no_kitty_shm);
     if use_kitty && !tui::kitty::terminal_supports_kitty() {
         eprintln!(
             "Warning: this terminal does not appear to support the kitty \
@@ -200,16 +226,44 @@ fn main() -> Result<()> {
 
     // Print structure summary for verification.
     eprintln!("Loaded: {} atoms", structure.num_atoms());
-    eprintln!("Renderer: {}", if use_kitty { "kitty" } else { "half-block" });
+    eprintln!(
+        "Renderer: {}",
+        if use_kitty {
+            format!("kitty ({} transmission)", medium.tag())
+        } else {
+            "half-block".to_string()
+        }
+    );
     if let Some(cell) = &structure.cell {
         let (a, b, c) = cell.lengths();
         eprintln!("  Cell: a={:.4}  b={:.4}  c={:.4} Å", a, b, c);
         let t = cell.tensor();
-        eprintln!("  a = ({:.4}, {:.4}, {:.4})", t[(0,0)], t[(1,0)], t[(2,0)]);
-        eprintln!("  b = ({:.4}, {:.4}, {:.4})", t[(0,1)], t[(1,1)], t[(2,1)]);
-        eprintln!("  c = ({:.4}, {:.4}, {:.4})", t[(0,2)], t[(1,2)], t[(2,2)]);
+        eprintln!(
+            "  a = ({:.4}, {:.4}, {:.4})",
+            t[(0, 0)],
+            t[(1, 0)],
+            t[(2, 0)]
+        );
+        eprintln!(
+            "  b = ({:.4}, {:.4}, {:.4})",
+            t[(0, 1)],
+            t[(1, 1)],
+            t[(2, 1)]
+        );
+        eprintln!(
+            "  c = ({:.4}, {:.4}, {:.4})",
+            t[(0, 2)],
+            t[(1, 2)],
+            t[(2, 2)]
+        );
     }
-    for (i, atom) in scene.atoms.iter().filter(|a| !a.is_periodic_image).take(3).enumerate() {
+    for (i, atom) in scene
+        .atoms
+        .iter()
+        .filter(|a| !a.is_periodic_image)
+        .take(3)
+        .enumerate()
+    {
         let el = format!("{:?}", atom.element);
         eprintln!(
             "  atom[{}] {} at ({:.4}, {:.4}, {:.4})",
@@ -239,17 +293,15 @@ fn main() -> Result<()> {
     // Terminal setup.
     enable_raw_mode().context("Failed to enable raw mode")?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)
-        .context("Failed to enter alternate screen")?;
+    execute!(stdout, EnterAlternateScreen).context("Failed to enter alternate screen")?;
     let _ = execute!(stdout, crossterm::event::EnableMouseCapture);
 
     let backend = CrosstermBackend::new(stdout);
-    let mut terminal =
-        ratatui::Terminal::new(backend).context("Failed to create terminal")?;
+    let mut terminal = ratatui::Terminal::new(backend).context("Failed to create terminal")?;
 
     let mut app = App::new(scene, cli.file);
     if use_kitty {
-        app.enable_kitty();
+        app.enable_kitty(medium);
     }
     if let Some(ref state) = mcp_state {
         app.set_mcp_state(state.clone());
