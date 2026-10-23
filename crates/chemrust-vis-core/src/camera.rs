@@ -88,19 +88,25 @@ impl Camera {
     /// Compute the view matrix (world → camera space).
     ///
     /// `view_matrix * world_point` gives camera-relative coordinates.
+    /// The camera target maps to view-space `(0, 0, -radius)`.
+    ///
+    /// nalgebra's `look_at_rh(eye, target, up)` already returns the
+    /// world→camera view matrix (it maps the eye to the origin), so
+    /// no inversion is needed.
     pub fn view_matrix(&self) -> Isometry3<f64> {
         let pos = self.position();
         let up = self.compute_up();
-        let pose = Isometry3::look_at_rh(&pos, &self.target, &up);
-        // look_at_rh gives camera→world; invert for world→camera
-        pose.inverse()
+        Isometry3::look_at_rh(&pos, &self.target, &up)
     }
 
     /// Camera-to-world isometry (for extracting camera axes).
+    ///
+    /// Inverse of the view matrix: `camera_pose * view_point` gives a
+    /// world-space point.
     fn camera_pose(&self) -> Isometry3<f64> {
         let pos = self.position();
         let up = self.compute_up();
-        Isometry3::look_at_rh(&pos, &self.target, &up)
+        Isometry3::look_at_rh(&pos, &self.target, &up).inverse()
     }
 
     /// Project a world-space point to normalized device coordinates (NDC)
@@ -282,6 +288,67 @@ mod tests {
         assert!(ndc.x.is_finite());
         assert!(ndc.y.is_finite());
         assert!(ndc.z.is_finite());
+    }
+
+    /// A pure horizontal target pan must produce zero vertical screen
+    /// displacement at every camera angle, including the pole-blend
+    /// up-vector band. Pan axes are the camera screen axes, so the
+    /// screen motion is axis-aligned regardless of theta/phi.
+    #[test]
+    fn horizontal_pan_is_screen_axis_aligned_at_all_angles() {
+        let target = Point3::new(5.0, 5.0, 5.0);
+        let thetas = [0.0_f64, 0.3, 1.0, 2.0, 3.0, 5.5];
+        // phi 0.05 and 0.0 sit in or at the pole-blend band.
+        let phis = [0.0_f64, 0.05, 0.1, 0.5, 1.5708, 2.5, 3.0, 6.0, 6.2];
+        for &theta in &thetas {
+            for &phi in &phis {
+                let mut cam = Camera::with_angles(target, 20.0, theta, phi);
+                let p = Point3::new(0.0, 0.0, 0.0);
+                let before = cam.view_matrix() * p;
+                cam.pan(3.0, 0.0);
+                let after = cam.view_matrix() * p;
+                let dx = after.x - before.x;
+                let dy = after.y - before.y;
+                assert!(
+                    dy.abs() < 1e-9,
+                    "theta={theta} phi={phi}: vertical shift {dy}"
+                );
+                assert!(
+                    dx.abs() > 1.0,
+                    "theta={theta} phi={phi}: horizontal shift too small {dx}"
+                );
+            }
+        }
+    }
+
+    /// The scene view-space shift from a target pan equals the pan
+    /// vector itself at every angle. Screen motion follows the
+    /// pointer path with no theta/phi coupling.
+    #[test]
+    fn pan_view_shift_matches_pan_vector_at_all_angles() {
+        let target = Point3::new(5.0, 5.0, 5.0);
+        let pairs = [
+            (0.0_f64, 0.0_f64),
+            (0.7, 0.4),
+            (2.2, 1.3),
+            (4.4, 2.7),
+            (5.8, 0.06),
+        ];
+        for &(theta, phi) in &pairs {
+            let mut cam = Camera::with_angles(target, 20.0, theta, phi);
+            let p = Point3::new(3.0, 7.0, 2.0);
+            let before = cam.view_matrix() * p;
+            cam.pan(2.5, -1.0);
+            let after = cam.view_matrix() * p;
+            assert!(
+                (after.x - (before.x - 2.5)).abs() < 1e-9,
+                "theta={theta} phi={phi}: x shift"
+            );
+            assert!(
+                (after.y - (before.y + 1.0)).abs() < 1e-9,
+                "theta={theta} phi={phi}: y shift"
+            );
+        }
     }
 
     #[test]

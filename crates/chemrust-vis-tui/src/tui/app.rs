@@ -20,7 +20,7 @@ use ratatui::{
     Terminal,
 };
 
-use super::input::{self, Action};
+use super::input::{self, Action, NavState};
 use super::kitty::{self, KittyRenderer};
 use super::mcp_server::SharedState;
 use super::widgets::axis_indicator::AxisIndicator;
@@ -44,6 +44,8 @@ pub struct App {
     mcp_state: Option<Arc<Mutex<SharedState>>>,
     /// Mouse gesture state for drag classification.
     mouse_state: input::MouseState,
+    /// Navigation toggle state (snipe mode).
+    nav_state: NavState,
     /// Pixel renderer for the scene area. `None` = half-block chars.
     kitty: Option<KittyRenderer>,
     /// True when the kitty image data must be re-sent: the camera,
@@ -82,6 +84,7 @@ impl App {
             running: true,
             mcp_state: None,
             mouse_state: input::MouseState::default(),
+            nav_state: NavState::default(),
             kitty: None,
             kitty_dirty: false,
             kitty_placement: (0, 0),
@@ -113,7 +116,12 @@ impl App {
 
             match event::read()? {
                 Event::Key(key) => {
-                    let action = input::handle_key_event(key, &mut self.camera, &mut self.viewport);
+                    let action = input::handle_key_event(
+                        key,
+                        &mut self.camera,
+                        &mut self.viewport,
+                        &mut self.nav_state,
+                    );
                     match action {
                         Action::Quit => self.running = false,
                         Action::Redraw | Action::Reset => self.mark_kitty_dirty(),
@@ -134,11 +142,17 @@ impl App {
                     self.mark_kitty_dirty();
                 }
                 Event::Mouse(mouse) => {
+                    // Vertical viewport units per terminal row: the kitty
+                    // pixel grid is 4 px per row, the half-block dot
+                    // grid is 2 dots per row.
+                    let y_scale = if self.kitty.is_some() { 4.0 } else { 2.0 };
                     let action = input::handle_mouse_event(
                         &mouse,
                         &mut self.camera,
                         &self.viewport,
+                        &self.nav_state,
                         &mut self.mouse_state,
+                        y_scale,
                     );
                     if action == Action::Redraw {
                         self.mark_kitty_dirty();
@@ -271,6 +285,7 @@ impl App {
                 phi_deg: self.camera.phi().to_degrees().rem_euclid(360.0),
                 radius: self.camera.radius(),
                 renderer: if self.kitty.is_some() { "kitty" } else { "half-block" },
+                sniped: self.nav_state.sniped,
             },
             layout[1],
         );

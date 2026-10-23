@@ -127,19 +127,21 @@ impl Viewport {
         let margin = 0.85;
         let base_scale = (self.width * margin / data_w).min(self.height * margin / data_h);
         let scale = base_scale * self.zoom;
-        // Center on data's view-space midpoint + pan offset.
-        let data_cx = (min_x + max_x) / 2.0;
-        let data_cy = (min_y + max_y) / 2.0;
+        // Anchor the view on the camera target. In view space the
+        // target's x/y are zero, so it lands on the canvas center
+        // (plus the viewport pan offset). Scaling still fits the
+        // data extent. Panning the target now moves the scene on
+        // screen.
         let cx = self.width / 2.0 + self.pan_x;
         let cy = self.height / 2.0 + self.pan_y;
         let atom_radius = (self.width.min(self.height) * 0.05 / scale).max(1.0);
 
-        // Step 3: map to canvas with centering on data centroid + pan offset
+        // Step 3: map to canvas, anchored on the camera target + pan offset
         let mut point_data: Vec<(DrawPoint, f64)> = view_pts
             .iter()
             .map(|(vp, atom)| {
-                let sx = (vp.x - data_cx) * scale + cx;
-                let sy = -(vp.y - data_cy) * scale + cy;
+                let sx = vp.x * scale + cx;
+                let sy = -vp.y * scale + cy;
                 let dp = DrawPoint {
                     x: sx,
                     y: sy,
@@ -156,7 +158,7 @@ impl Viewport {
         point_data.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
         let points: Vec<DrawPoint> = point_data.into_iter().map(|(dp, _)| dp).collect();
 
-        // Step 4: project cell edges (centered on data centroid + pan)
+        // Step 4: project cell edges (anchored on the camera target)
         let lines: Vec<DrawLine> = scene
             .cell_edges
             .iter()
@@ -164,10 +166,10 @@ impl Viewport {
                 let s = view_matrix * Point3::new(start[0], start[1], start[2]);
                 let e = view_matrix * Point3::new(end[0], end[1], end[2]);
                 DrawLine {
-                    x1: (s.x - data_cx) * scale + cx,
-                    y1: -(s.y - data_cy) * scale + cy,
-                    x2: (e.x - data_cx) * scale + cx,
-                    y2: -(e.y - data_cy) * scale + cy,
+                    x1: s.x * scale + cx,
+                    y1: -s.y * scale + cy,
+                    x2: e.x * scale + cx,
+                    y2: -e.y * scale + cy,
                 }
             })
             .collect();
@@ -246,6 +248,76 @@ mod tests {
         for pt in &cmds.points {
             assert!(pt.x.is_finite(), "x={}", pt.x);
             assert!(pt.y.is_finite(), "y={}", pt.y);
+        }
+    }
+
+    /// Regression: panning the camera target must move the scene on
+    /// screen. The old data-centroid centering re-centered every frame
+    /// and silently cancelled target pans.
+    #[test]
+    fn camera_target_pan_shifts_scene_on_screen() {
+        let structure = cu111_co_system(3.615);
+        let scene = Scene::from_structure(&structure);
+        let center = scene.bounding_box_center();
+        let camera = Camera::new(
+            Point3::new(center[0], center[1], center[2] + 20.0),
+            20.0,
+        );
+        let viewport = Viewport::new(160.0, 96.0);
+        let before = viewport.render(&scene, &camera);
+
+        let mut cam2 = camera.clone();
+        cam2.pan(2.0, 1.0);
+        let after = viewport.render(&scene, &cam2);
+
+        assert_eq!(before.points.len(), after.points.len());
+
+        // The camera target sits at the canvas center in both renders.
+        // Its view-space x/y are zero, so the scene shifts rigidly by
+        // exactly the target's view-space displacement.
+        let target_view_b = camera.view_matrix() * camera.target();
+        let target_view_a = cam2.view_matrix() * cam2.target();
+        assert!(target_view_b.x.abs() < 1e-9, "target view x = {}", target_view_b.x);
+        assert!(target_view_b.y.abs() < 1e-9, "target view y = {}", target_view_b.y);
+        assert!(target_view_a.x.abs() < 1e-9, "target view x = {}", target_view_a.x);
+        assert!(target_view_a.y.abs() < 1e-9, "target view y = {}", target_view_a.y);
+
+        // A target pan keeps view depth invariant, so pairing points by
+        // (atom_index, depth) is stable. Periodic replicas share
+        // atom_index with the original atom; depth breaks the tie.
+        let mut b = before.points.clone();
+        let mut a = after.points.clone();
+        b.sort_by(|p, q| p.atom_index
+            .cmp(&q.atom_index)
+            .then_with(|| p.z_view.partial_cmp(&q.z_view).unwrap()));
+        a.sort_by(|p, q| p.atom_index
+            .cmp(&q.atom_index)
+            .then_with(|| p.z_view.partial_cmp(&q.z_view).unwrap()));
+        for (pb, pa) in b.iter().zip(a.iter()) {
+            assert!(
+                (pb.z_view - pa.z_view).abs() < 1e-9,
+                "view depth changed for atom {}",
+                pb.atom_index
+            );
+        }
+
+        let b0 = &b[0];
+        let a0 = &a[0];
+        let dx = a0.x - b0.x;
+        let dy = a0.y - b0.y;
+        // The shift is non-zero on both axes.
+        assert!(dx.abs() > 0.5, "dx = {}", dx);
+        assert!(dy.abs() > 0.5, "dy = {}", dy);
+        // The shift is rigid: every point moves by the same vector.
+        for (pb, pa) in b.iter().zip(a.iter()) {
+            assert!((pa.x - pb.x - dx).abs() < 1e-9, "atom {}", pb.atom_index);
+            assert!((pa.y - pb.y - dy).abs() < 1e-9, "atom {}", pb.atom_index);
+        }
+        // Cell edges shift by the same vector (construction order is
+        // stable).
+        for (lb, la) in before.lines.iter().zip(after.lines.iter()) {
+            assert!((la.x1 - lb.x1 - dx).abs() < 1e-9);
+            assert!((la.y1 - lb.y1 - dy).abs() < 1e-9);
         }
     }
 

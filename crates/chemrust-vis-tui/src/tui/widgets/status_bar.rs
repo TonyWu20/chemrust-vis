@@ -9,8 +9,8 @@ use ratatui::{
     widgets::{Paragraph, Widget},
 };
 
-/// Status bar showing file name, atom count, camera parameters, and
-/// renderer.
+/// Status bar showing file name, atom count, camera parameters,
+/// renderer, and snipe mode.
 pub struct StatusBar {
     pub file_name: String,
     pub atom_count: usize,
@@ -19,11 +19,13 @@ pub struct StatusBar {
     pub radius: f64,
     /// Active scene renderer: "kitty" or "half-block".
     pub renderer: &'static str,
+    /// Snipe mode active: orbit and move-zoom run at 1/10 sensitivity.
+    pub sniped: bool,
 }
 
 impl Widget for StatusBar {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let text = Line::from(vec![
+        let mut spans = vec![
             Span::styled(
                 format!(" {} ", self.file_name),
                 Style::default().fg(Color::White).bg(Color::DarkGray),
@@ -36,7 +38,11 @@ impl Widget for StatusBar {
                 self.radius,
                 self.renderer
             )),
-        ]);
-        Paragraph::new(text).render(area, buf);
+        ];
+        if self.sniped {
+            spans.push(Span::raw(" | "));
+            spans.push(Span::styled("snipe", Style::default().fg(Color::Yellow)));
+        }
+        Paragraph::new(Line::from(spans)).render(area, buf);
     }
 }

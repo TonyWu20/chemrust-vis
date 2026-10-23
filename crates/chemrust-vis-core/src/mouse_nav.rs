@@ -9,12 +9,22 @@
 //! - Screen axes: +x = right, +y = down (terminal row grows downward).
 
 /// Orbit sensitivity: radians of camera rotation per pixel of drag at
-/// radius 1. A 10-pixel drag at radius 100 produces 0.001 rad (~0.06 deg).
-pub const S_ROT: f64 = 0.01;
+/// radius 1. A 25-pixel drag at radius 50 produces 0.02 rad (~1.1 deg).
+pub const S_ROT: f64 = 0.04;
+
+/// Pan sensitivity multiplier on the base `px * radius / viewport_h`
+/// mapping. A gain of 2.0 makes a drag move the view by roughly the
+/// drag distance on screen at the default framing.
+pub const S_PAN: f64 = 2.0;
 
 /// Zoom sensitivity: radius delta per scroll tick per unit radius.
 /// One scroll tick at radius 30 changes the radius by 0.6.
 pub const S_ZOOM: f64 = 0.02;
+
+/// Move-based zoom sensitivity: radius delta per vertical pixel of
+/// pointer travel per unit radius. Ten pixels of travel equal one
+/// wheel tick at the same snipe state.
+pub const S_ZOOM_MOVE: f64 = 0.002;
 
 /// Smallest allowed camera-to-target distance.
 pub const MIN_RADIUS: f64 = 0.1;
@@ -39,7 +49,7 @@ pub fn orbit_deltas(px: f64, py: f64, radius: f64) -> (f64, f64) {
 /// Sensitivity is proportional to radius: the same screen drag moves the
 /// target by the same world amount at every zoom level.
 pub fn pan_deltas(px: f64, py: f64, radius: f64, viewport_h: f64) -> (f64, f64) {
-    (px * radius / viewport_h, py * radius / viewport_h)
+    (px * S_PAN * radius / viewport_h, py * S_PAN * radius / viewport_h)
 }
 
 /// Alt+drag ("push the paper") pan deltas: the horizontal component is
@@ -47,7 +57,7 @@ pub fn pan_deltas(px: f64, py: f64, radius: f64, viewport_h: f64) -> (f64, f64) 
 /// The vertical component is unchanged (screen rows grow downward, but
 /// the camera up axis also points up in view space).
 pub fn alt_drag_pan_deltas(px: f64, py: f64, radius: f64, viewport_h: f64) -> (f64, f64) {
-    (-px * radius / viewport_h, py * radius / viewport_h)
+    (-px * S_PAN * radius / viewport_h, py * S_PAN * radius / viewport_h)
 }
 
 /// Scroll ticks to radius delta.
@@ -57,7 +67,17 @@ pub fn zoom_delta(ticks: f64, radius: f64) -> f64 {
     ticks * S_ZOOM * radius
 }
 
-/// Sensitivity divisor when the snipe modifier (Ctrl) is held.
+/// Move-based zoom: radius delta for vertical pointer travel of `dy`
+/// at the given camera radius.
+///
+/// Travel is signed: up-travel is negative (zoom in, radius shrinks),
+/// down-travel is positive (zoom out, radius grows). Ten pixels of
+/// travel equal one wheel tick at the same snipe state.
+pub fn move_zoom_delta(dy: f64, radius: f64, snipe: bool) -> f64 {
+    dy * S_ZOOM_MOVE * radius / snipe_factor(snipe)
+}
+
+/// Sensitivity divisor when snipe mode is active.
 pub fn snipe_factor(snipe: bool) -> f64 {
     if snipe { 10.0 } else { 1.0 }
 }
@@ -87,13 +107,13 @@ mod tests {
     #[test]
     fn orbit_delta_theta() {
         let (d_theta, _) = orbit_deltas(10.0, 5.0, 100.0);
-        assert!((d_theta - 0.001).abs() < 1e-15, "d_theta = {}", d_theta);
+        assert!((d_theta - 0.004).abs() < 1e-15, "d_theta = {}", d_theta);
     }
 
     #[test]
     fn orbit_delta_phi() {
         let (_, d_phi) = orbit_deltas(10.0, 5.0, 100.0);
-        assert!((d_phi - 0.0005).abs() < 1e-15, "d_phi = {}", d_phi);
+        assert!((d_phi - 0.002).abs() < 1e-15, "d_phi = {}", d_phi);
     }
 
     #[test]
@@ -109,9 +129,34 @@ mod tests {
     }
 
     #[test]
+    fn move_zoom_down_travel_zooms_out() {
+        let dr = move_zoom_delta(10.0, 100.0, false);
+        assert!((dr - 2.0).abs() < 1e-15, "dr = {}", dr);
+    }
+
+    #[test]
+    fn move_zoom_up_travel_zooms_in() {
+        let dr = move_zoom_delta(-10.0, 100.0, false);
+        assert!((dr - (-2.0)).abs() < 1e-15, "dr = {}", dr);
+    }
+
+    #[test]
+    fn move_zoom_sniped_divides_by_ten() {
+        let dr = move_zoom_delta(10.0, 100.0, true);
+        assert!((dr - 0.2).abs() < 1e-15, "dr = {}", dr);
+    }
+
+    #[test]
+    fn move_zoom_ten_pixels_equal_one_wheel_tick() {
+        let from_move = move_zoom_delta(10.0, 30.0, false);
+        let from_wheel = zoom_delta(1.0, 30.0);
+        assert!((from_move - from_wheel).abs() < 1e-15, "{} vs {}", from_move, from_wheel);
+    }
+
+    #[test]
     fn alt_drag_pan_inverts_horizontal() {
         let (wx, _) = alt_drag_pan_deltas(-10.0, 0.0, 50.0, 100.0);
-        assert!((wx - 5.0).abs() < 1e-15, "wx = {}", wx);
+        assert!((wx - 10.0).abs() < 1e-15, "wx = {}", wx);
     }
 
     #[test]
@@ -170,6 +215,14 @@ mod tests {
         let (w1, _) = pan_deltas(10.0, 0.0, 50.0, 100.0);
         let (w2, _) = pan_deltas(10.0, 0.0, 100.0, 100.0);
         assert!((w2 - 2.0 * w1).abs() < 1e-12, "{} vs {}", w1, w2);
+    }
+
+    #[test]
+    fn sensitivity_constants() {
+        assert!((S_ROT - 0.04).abs() < 1e-15);
+        assert!((S_PAN - 2.0).abs() < 1e-15);
+        assert!((S_ZOOM - 0.02).abs() < 1e-15);
+        assert!((S_ZOOM_MOVE - 0.002).abs() < 1e-15);
     }
 
     #[test]
