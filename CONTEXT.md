@@ -206,7 +206,11 @@ switch to a versioned dependency.
   Transmission medium follows the session: shared memory (`t=s`) on
   local known terminals, plain base64 over SSH and on unknown
   terminals, `--kitty-compress` for the zlib path (`o=z`), and
-  `--no-kitty-shm` to force base64. The status bar shows the
+  `--no-kitty-shm` to force base64. The full-canvas path (one image,
+  in-place data replace) is the default. `--kitty-full` makes it
+  explicit. `--kitty-delta` opts into the content-box crop, which
+  saves bandwidth on terminals that evict old images but accumulates
+  on Ghostty (ADR-0002 amendment 6). The status bar shows the
   medium with the frame size.
   Terminal responses are suppressed with `q=1` so the protocol's
   `i=1;OK` replies cannot be parsed as key input and drive the camera

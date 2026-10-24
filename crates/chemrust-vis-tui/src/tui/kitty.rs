@@ -43,8 +43,17 @@ pub const MAX_CHUNK: usize = 4096;
 /// id replaces the stored image (all old placements are deleted first).
 pub const IMAGE_ID: u32 = 1;
 
-/// Image id for the 1x1 black clear tile (content-box delta path).
+/// Image id for the black clear image (content-box delta path). An 8x8
+/// black image sent once; placements stretch it to the clear rectangle.
+/// A small non-1x1 size keeps the scale a normal terminal operation.
 pub const BLACK_TILE_ID: u32 = 2;
+
+/// Base image id for delta-path content images. Each frame uses the
+/// next unused id (monotonic), so a stored image is never replaced with
+/// different pixel dimensions while its placement is live: the operation
+/// terminals handle least reliably. Old content images stay covered by
+/// the black clear and are evicted by the terminal.
+const CONTENT_ID_BASE: u32 = 100;
 
 /// The pixel-data transmission medium for frame images.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -388,7 +397,7 @@ pub fn encode_transmission_shm(
     }
     let os_id = shm.get_os_id().to_string();
     let payload = base64_encode(os_id.as_bytes());
-    let mut out = format!(
+    let out = format!(
         "\x1b_Gi={image_id},f=24,s={width},v={height},q=1,t=s,S={};{payload}\x1b\\",
         bytes.len()
     )
@@ -405,7 +414,8 @@ pub fn encode_transmission_shm(
 /// so one tile clears a region of any size. Always sent base64: the
 /// bytes do not justify shared memory.
 pub fn encode_black_tile() -> Vec<u8> {
-    encode_transmission_rgb(&[[0, 0, 0]], 1, 1, BLACK_TILE_ID)
+    let px = vec![[0u8, 0, 0]; 8 * 8];
+    encode_transmission_rgb(&px, 8, 8, BLACK_TILE_ID)
 }
 
 /// Cursor move to cell (col, row), 0-based as in crossterm.
@@ -578,18 +588,22 @@ pub fn should_clear(new: (u16, u16, u16, u16), old: (u16, u16, u16, u16)) -> boo
 
 /// Interactive renderer: produces the full escape sequence for one frame.
 pub struct KittyRenderer {
-    image_id: u32,
     medium: Medium,
     /// A shared-memory create failed this session; the effective
     /// medium dropped to plain base64.
     shm_failed: bool,
-    /// The 1x1 black tile was transmitted this session.
+    /// The black clear image was transmitted this session.
     black_sent: bool,
+    /// Index into [`CONTENT_POOL`] for the next content image.
+    content_seq: u32,
     /// The cell rectangle (c0, r0, c, r) of the last placed content
-    /// image, or of the full canvas when the last frame was full.
-    last_rect: Option<(u16, u16, u16, u16)>,
+    /// region. The clear target when the region moves.
+    last_content: Option<(u16, u16, u16, u16)>,
     /// Sequence number for shared-memory segment names.
     shm_seq: u64,
+    /// A full-canvas placement is live; subsequent full frames only
+    /// replace the image data in place instead of re-placing.
+    full_placed: bool,
 }
 
 /// The content region covers this share of the canvas before the
@@ -599,12 +613,13 @@ const CROP_AREA_LIMIT: u32 = 95;
 impl KittyRenderer {
     pub fn new() -> Self {
         KittyRenderer {
-            image_id: IMAGE_ID,
             medium: Medium::Base64,
             shm_failed: false,
             black_sent: false,
-            last_rect: None,
+            content_seq: 0,
+            last_content: None,
             shm_seq: 0,
+            full_placed: false,
         }
     }
 
@@ -624,8 +639,17 @@ impl KittyRenderer {
     /// Drop placement state after a delete-all (terminal resize,
     /// frame-size change). The black tile is re-sent on demand.
     pub fn reset_placement_state(&mut self) {
-        self.last_rect = None;
+        self.last_content = None;
         self.black_sent = false;
+        self.content_seq = 0;
+        self.full_placed = false;
+    }
+
+    /// The next content image id: monotonic, never reused this session.
+    fn next_content_id(&mut self) -> u32 {
+        let id = CONTENT_ID_BASE + self.content_seq;
+        self.content_seq += 1;
+        id
     }
 
     fn effective_medium(&self) -> Medium {
@@ -658,7 +682,6 @@ impl KittyRenderer {
         scene_rows: u16,
         crop_ok: bool,
     ) -> Vec<u8> {
-        let full = (0u16, 0u16, cols, scene_rows);
         let plan = if crop_ok {
             match content_bbox(cmds, px_w as u32, px_h as u32) {
                 Some((ox, oy, rw, rh)) => {
@@ -681,31 +704,40 @@ impl KittyRenderer {
         let mut out = Vec::new();
         match plan {
             FramePlan::Empty => {
-                if self.last_rect.is_some() {
-                    out.extend(self.clear_escapes());
-                    self.last_rect = None;
+                if self.last_content.is_some() || self.full_placed {
+                    out.extend(encode_delete_all());
+                    self.last_content = None;
+                    self.full_placed = false;
+                    self.content_seq = 0;
+                    self.black_sent = false;
                 }
             }
             FramePlan::Full => {
                 // The full-canvas image is opaque black in the
                 // content-free areas: it covers any old rectangle.
-                // The clear still runs on a region-to-full
-                // transition: the old placement re-renders the
-                // replaced image data until the new placement lands.
-                if self.last_rect.is_some() && self.last_rect != Some(full) {
-                    out.extend(self.clear_escapes());
-                }
+                // On a region-to-full transition the live region is
+                // covered by the opaque canvas, so no clear is needed.
                 let pixels = rasterize(cmds, px_w, px_h);
-                self.transmit(&mut out, &pixels, px_w, px_h);
-                out.extend(encode_placement(self.image_id, cols, scene_rows));
-                self.last_rect = Some(full);
+                self.transmit(&mut out, &pixels, px_w, px_h, IMAGE_ID);
+                if !self.full_placed {
+                    out.extend(encode_move_to(0, 0));
+                    out.extend(encode_placement(IMAGE_ID, cols, scene_rows));
+                    self.full_placed = true;
+                }
+                self.last_content = None;
             }
             FramePlan::Region(rect) => {
-                if let Some(old) = self.last_rect {
+                // Clear the previous content position when the new
+                // region does not cover it: the black clear image,
+                // stretched over the old rectangle.
+                if let Some(old) = self.last_content {
                     if should_clear(rect, old) {
-                        out.extend(self.clear_escapes());
+                        out.extend(self.clear_rect_escapes(old));
                     }
                 }
+                // Place the new content region under a fresh id:
+                // a live image is never replaced with new dimensions.
+                let id = self.next_content_id();
                 let (c0, r0, c, r) = rect;
                 let ppc = px_w as f64 / f64::from(cols.max(1));
                 let ppr = px_h as f64 / f64::from(scene_rows.max(1));
@@ -714,19 +746,21 @@ impl KittyRenderer {
                 let ox = f64::from(c0) * ppc;
                 let oy = f64::from(r0) * ppr;
                 let pixels = rasterize_region(cmds, ox, oy, rw, rh);
-                self.transmit(&mut out, &pixels, rw, rh);
+                self.transmit(&mut out, &pixels, rw, rh, id);
                 out.extend(encode_move_to(c0, r0));
-                out.extend(encode_placement(self.image_id, c, r));
-                self.last_rect = Some(rect);
+                out.extend(encode_placement(id, c, r));
+                self.full_placed = false;
+                self.last_content = Some(rect);
             }
         }
         out
     }
 
-    /// Black-tile clear of the last placed rectangle: the tile
-    /// transmission (once) and its placement over the old rectangle.
-    fn clear_escapes(&mut self) -> Vec<u8> {
-        let (c0, r0, c, r) = self.last_rect.expect("called with a live rectangle");
+    /// Black clear of a content rectangle: the black image
+    /// transmission (once) and its placement stretched over the old
+    /// rectangle.
+    fn clear_rect_escapes(&mut self, old: (u16, u16, u16, u16)) -> Vec<u8> {
+        let (c0, r0, c, r) = old;
         let mut out = Vec::new();
         if !self.black_sent {
             out.extend(encode_black_tile());
@@ -741,35 +775,43 @@ impl KittyRenderer {
     ///
     /// A shared-memory create failure downgrades the session to
     /// plain base64 for the rest of the run.
-    fn transmit(&mut self, out: &mut Vec<u8>, pixels: &[[u8; 3]], w: usize, h: usize) {
+    /// Append the pixel-data transmission for `image_id` in the
+    /// effective medium.
+    ///
+    /// A shared-memory create failure downgrades the session to plain
+    /// base64 for the rest of the run.
+    fn transmit(
+        &mut self,
+        out: &mut Vec<u8>,
+        pixels: &[[u8; 3]],
+        w: usize,
+        h: usize,
+        image_id: u32,
+    ) {
         match self.effective_medium() {
             Medium::Shm => {
                 self.shm_seq += 1;
-                match encode_transmission_shm(
-                    pixels,
-                    w as u32,
-                    h as u32,
-                    self.image_id,
-                    self.shm_seq,
-                ) {
+                match encode_transmission_shm(pixels, w as u32, h as u32, image_id, self.shm_seq)
+                {
                     Ok(seq) => out.extend(seq),
                     Err(_) => {
                         self.shm_failed = true;
-                        let raw: Vec<u8> = pixels.iter().flat_map(|p| p.iter().copied()).collect();
-                        out.extend(encode_transmission(&raw, w as u32, h as u32, self.image_id));
+                        let raw: Vec<u8> =
+                            pixels.iter().flat_map(|p| p.iter().copied()).collect();
+                        out.extend(encode_transmission(&raw, w as u32, h as u32, image_id));
                     }
                 }
             }
             Medium::Base64 => {
                 let raw: Vec<u8> = pixels.iter().flat_map(|p| p.iter().copied()).collect();
-                out.extend(encode_transmission(&raw, w as u32, h as u32, self.image_id));
+                out.extend(encode_transmission(&raw, w as u32, h as u32, image_id));
             }
             Medium::Base64Zlib => {
                 out.extend(encode_transmission_zlib(
                     pixels,
                     w as u32,
                     h as u32,
-                    self.image_id,
+                    image_id,
                 ));
             }
         }
@@ -1141,8 +1183,8 @@ mod tests {
         let seq = encode_black_tile();
         let escs = split_escapes(&seq);
         assert_eq!(escs.len(), 1);
-        assert_eq!(escs[0].0, "i=2,f=24,s=1,v=1,q=1,m=0");
-        assert_eq!(base64_decode(&escs[0].1), Some(vec![0, 0, 0]));
+        assert_eq!(escs[0].0, "i=2,f=24,s=8,v=8,q=1,m=0");
+        assert_eq!(base64_decode(&escs[0].1), Some(vec![0u8; 8 * 8 * 3]));
     }
 
     #[test]
@@ -1204,8 +1246,8 @@ mod tests {
             "tile placed over the old rectangle"
         );
         assert!(
-            escs_b.iter().any(|e| e.0.starts_with("i=1,")),
-            "content transmitted"
+            escs_b.iter().any(|e| e.0.starts_with("i=101,")),
+            "content transmitted under a fresh id"
         );
         // Same region again: contained, nothing new is sent.
         let seq_c = r.frame(&test_point(150.0, 80.0, 2.0), 200, 100, 10, 5, true);
@@ -1227,11 +1269,7 @@ mod tests {
         };
         let seq = r.frame(&empty, 200, 100, 10, 5, true);
         let escs = split_escapes(&seq);
-        assert!(escs.iter().any(|e| e.0.starts_with("i=2,")), "tile sent");
-        assert!(
-            escs.iter().any(|e| e.0.starts_with("a=p,i=2,")),
-            "tile placed over the old rectangle"
-        );
+        assert!(escs.iter().any(|e| e.0.starts_with("a=d")), "delete-all sent");
         assert!(
             escs.iter().all(|e| !e.0.starts_with("i=1,")),
             "no content transmission"
@@ -1242,22 +1280,44 @@ mod tests {
     }
 
     #[test]
-    fn frame_full_plan_after_region_clears_full_canvas() {
+    fn frame_full_plan_covers_live_region_without_clear() {
         let mut r = KittyRenderer::new();
         let _ = r.frame(&test_point(10.0, 10.0, 2.0), 200, 100, 10, 5, true);
-        // A dense scene forces the full-canvas plan; the live region
-        // must be covered, which the opaque full canvas does on its
-        // own, but the transition still clears the old rectangle.
+        // A dense scene forces the full-canvas plan. The opaque
+        // canvas covers the live region, so no black clear is sent.
         let dense = test_point(100.0, 50.0, 90.0);
         let seq = r.frame(&dense, 200, 100, 10, 5, true);
         let escs = split_escapes(&seq);
         assert!(
-            escs.iter().any(|e| e.0.starts_with("a=p,i=2,")),
-            "black tile covers the old region"
+            escs.iter().any(|e| e.0.starts_with("i=1,")),
+            "full canvas transmitted"
         );
         assert!(
-            escs.iter().any(|e| e.0.contains("c=10")),
+            escs.iter().any(|e| e.0.starts_with("a=p,i=1") && e.0.contains("c=10")),
             "full-canvas placement"
+        );
+        assert!(
+            escs.iter().all(|e| !e.0.starts_with("a=p,i=2,")),
+            "no black clear on a region-to-full transition"
+        );
+    }
+
+    #[test]
+    fn frame_full_mode_places_once_then_replaces_data() {
+        let mut r = KittyRenderer::new();
+        let p = test_point(10.0, 10.0, 2.0);
+        // First full frame: content transmission plus one placement.
+        let s1 = r.frame(&p, 200, 100, 10, 5, false);
+        let e1 = split_escapes(&s1);
+        assert!(e1.iter().any(|e| e.0.starts_with("i=1,")), "content sent");
+        assert!(e1.iter().any(|e| e.0.starts_with("a=p,i=1,")), "placed");
+        // Second full frame: data replace only, no new placement.
+        let s2 = r.frame(&p, 200, 100, 10, 5, false);
+        let e2 = split_escapes(&s2);
+        assert!(e2.iter().any(|e| e.0.starts_with("i=1,")), "content res");
+        assert!(
+            e2.iter().all(|e| !e.0.starts_with("a=p,")),
+            "no re-placement in steady state"
         );
     }
 

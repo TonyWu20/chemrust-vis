@@ -60,6 +60,13 @@ pub struct App {
     /// Last transmitted kitty frame size in pixels; shown in the
     /// status bar so the active grid is visible.
     kitty_frame_px: Option<(u32, u32)>,
+    /// Force the full-canvas kitty path (no content-box delta, no
+    /// black-tile clear): one image, in-place data replace.
+    kitty_full_only: bool,
+    /// Opt into the content-box delta (crop) path. Off by default:
+    /// the full-canvas path is the default because terminals that
+    /// do not evict old images (Ghostty) accumulate delta images.
+    kitty_delta: bool,
 }
 
 impl App {
@@ -95,6 +102,8 @@ impl App {
             kitty_placement: (0, 0),
             kitty_px_per_row: 4.0,
             kitty_frame_px: None,
+            kitty_full_only: false,
+            kitty_delta: false,
         }
     }
 
@@ -108,6 +117,20 @@ impl App {
     pub fn enable_kitty(&mut self, medium: kitty::Medium) {
         self.kitty = Some(KittyRenderer::with_medium(medium));
         self.kitty_dirty = true;
+    }
+
+    /// Force the full-canvas transmission path: every frame sends the
+    /// whole canvas as one image and replaces the data in place. No
+    /// content-box crop, no black-tile clear, no moving placements.
+    /// The most conservative (and most robust) kitty mode.
+    pub fn enable_kitty_full_only(&mut self) {
+        self.kitty_full_only = true;
+    }
+
+    /// Enable the content-box delta (crop) path. Off by default; the
+    /// full-canvas path is the default.
+    pub fn enable_kitty_delta(&mut self) {
+        self.kitty_delta = true;
     }
 
     /// Run the main event loop.
@@ -231,7 +254,8 @@ impl App {
             if mapping_changed {
                 renderer.reset_placement_state();
             }
-            renderer.frame(&cmds, px_w, px_h, cols, scene_rows, native.is_some())
+            let crop_ok = native.is_some() && self.kitty_delta && !self.kitty_full_only;
+            renderer.frame(&cmds, px_w, px_h, cols, scene_rows, crop_ok)
         };
         let backend = terminal.backend_mut();
         if mapping_changed {

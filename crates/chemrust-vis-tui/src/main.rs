@@ -64,6 +64,21 @@ struct Cli {
     /// terminals that would otherwise use shared memory.
     #[arg(long)]
     no_kitty_shm: bool,
+
+    /// Use the full-canvas kitty transmission path: send the whole
+    /// canvas every frame as one image and replace the data in
+    /// place. No content-box crop, no black clear. This is now the
+    /// default; the flag keeps the mode explicit.
+    #[arg(long)]
+    kitty_full: bool,
+
+    /// Enable the content-box delta (crop) transmission path: send
+    /// only the molecule's bounding box each frame and clear the
+    /// old position with a small black image. It saves bandwidth on
+    /// terminals that evict old images (kitty, WezTerm). Ghostty
+    /// does not evict, so its images accumulate; avoid it there.
+    #[arg(long)]
+    kitty_delta: bool,
 }
 
 /// Terminal size, falling back to 80x24 when the query fails or
@@ -302,6 +317,12 @@ fn main() -> Result<()> {
     let mut app = App::new(scene, cli.file);
     if use_kitty {
         app.enable_kitty(medium);
+        if cli.kitty_full {
+            app.enable_kitty_full_only();
+        }
+        if cli.kitty_delta {
+            app.enable_kitty_delta();
+        }
     }
     if let Some(ref state) = mcp_state {
         app.set_mcp_state(state.clone());

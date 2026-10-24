@@ -355,3 +355,76 @@ section above:
   prefers the terminal's reported pixel size.) The
   `--sixel` one-shot path sizes its buffer from the queried pixel
   size instead (amendment above).
+
+## Amendment 6 (2026-10-24): Ghostty corruption report, `--kitty-full`
+
+Report: on Ghostty (macOS, local and over SSH), the interactive renderer
+looks correct on startup, then after a few rotation steps the view turns
+black and does not recover. Both transmission mediums (shared memory
+local, base64 over SSH) show the same corruption, so the medium is not
+the cause; the shared content-box delta path is the common factor.
+
+Diagnosis so far:
+
+- The emitted escape stream is well-formed and geometrically
+  consistent (audited byte by byte from a forced pty).
+- A software simulation of the terminal image store composites the
+  stream to a clean molecule on black: no corruption.
+- The shared-memory segments carry the full pixel data (153 KB at the
+  test window).
+- Suspected root cause: a terminal-side bug interacting with the
+  delta design. Ghostty issues #6711 (same-image-ID data replace not
+  honored, fixed in 1.4.0) and #6710 (image stacking) are exactly the
+  operations the delta path relies on: replacing the live image data
+  with different pixel dimensions every frame, accumulating
+  placements, and a 1x1 black tile stretched to clear the old
+  rectangle. The reporter's Ghostty version is unconfirmed; a build
+  earlier than 1.4.0 exhibits #6711.
+
+Changes:
+
+- New flag `--kitty-full`: forces the full-canvas transmission path.
+  One image, one fixed placement at the top-left of the scene, and
+  in-place data replacement afterwards (the same dimensions every
+  frame, the safest replace). No content-box crop, no black clear,
+  no moving placements. The most conservative kitty mode and the
+  isolation test.
+- The full-canvas path places once and then replaces the image data
+  in place instead of re-placing every frame.
+- Empty-scene clearing uses the delete-all action, so a live
+  full-canvas image also clears.
+- The delta path no longer re-transmits under a fixed content id.
+  Each frame places its content under a fresh monotonic image id
+  (base 100), so a stored image is never replaced with different
+  pixel dimensions while its placement is live. Old content images
+  stay covered by the black clear and are evicted by the terminal.
+- The black clear is now an 8x8 image (sent once, then placed
+  stretched over the old rectangle) instead of a 1x1 tile, keeping
+  the scale a normal terminal operation.
+
+Reporter confirmed the Ghostty version is 1.3.1, the newest stable
+release. So updating is not a fix; the robustness work above is the
+app-side response.
+
+Open:
+
+- Confirm on 1.3.1 whether the rebuilt delta path still corrupts.
+- If it does, `--kitty-full` is the fully robust fallback (single
+  image, no accumulation). If even that corrupts, report to the
+  Ghostty project: a single-image in-place replace should not break.
+- Optional follow-up: a bounded delta that periodically sends
+  delete-all to cap image-stack growth, if a terminal's eviction is
+  too slow.
+
+Decision (after 1.3.1 testing): the full-canvas path is now the
+default. The reporter confirmed the rebuilt delta no longer paints
+black over the atoms, but Ghostty does not evict old images, so the
+delta path's per-frame content images accumulate without bound. The
+full-canvas path stores a single image and runs smoothly. The
+transmission paths are therefore:
+
+- Default (no flag): full-canvas, one image, in-place data replace.
+- `--kitty-full`: the same default, made explicit.
+- `--kitty-delta`: opt-in content-box crop. Saves bandwidth on
+  terminals that evict old images (kitty, WezTerm). On Ghostty it
+  accumulates images; avoid it there.
