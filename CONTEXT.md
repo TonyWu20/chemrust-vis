@@ -208,10 +208,8 @@ switch to a versioned dependency.
   uses a fresh monotonic image id per frame. The medium is chosen by
   `--kitty-medium`: `auto` (default, shared memory on local known
   terminals and plain base64 over SSH), `shm`, `base64`, or `zlib`
-  (`o=z`). The old flags `--kitty`, `--kitty-full`, `--kitty-delta`,
-  `--kitty-compress`, and `--no-kitty-shm` remain as hidden
-  deprecated aliases. The status bar shows the medium with the frame
-  size (ADR-0002 amendment 6).
+  (`o=z`). The status bar shows the medium with the frame size
+  (ADR-0002 amendment 6).
   Terminal responses are suppressed with `q=1` so the protocol's
   `i=1;OK` replies cannot be parsed as key input and drive the camera
   (amendment 2026-10-14, ADR-0002). `=` is not a key binding.

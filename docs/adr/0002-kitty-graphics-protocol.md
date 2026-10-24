@@ -440,5 +440,5 @@ interactive collision. The current surface is:
 - `--renderer <auto|kitty|halfblock>`: protocol selection.
 
 The old names `--kitty`, `--kitty-full`, `--kitty-delta`,
-`--kitty-compress`, and `--no-kitty-shm` remain as hidden deprecated
-aliases that map onto the new flags.
+`--kitty-compress`, and `--no-kitty-shm` were removed. Existing
+commands must use the new flags.

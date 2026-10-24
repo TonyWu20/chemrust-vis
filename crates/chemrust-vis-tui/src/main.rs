@@ -90,35 +90,10 @@ struct Cli {
     /// Kitty transmission medium for the interactive TUI.
     #[arg(long, value_enum, default_value_t = KittyMedium::Auto)]
     kitty_medium: KittyMedium,
-
-    // Deprecated aliases, kept for existing commands and hidden
-    // from the help output. Each maps to a current flag.
-    /// One-shot render. Use --once.
-    #[arg(long, hide = true)]
-    kitty: bool,
-    /// Full-canvas strategy. Use --kitty-mode full.
-    #[arg(long, hide = true)]
-    kitty_full: bool,
-    /// Content-box crop strategy. Use --kitty-mode delta.
-    #[arg(long, hide = true)]
-    kitty_delta: bool,
-    /// zlib-compress the base64 payload. Use --kitty-medium zlib.
-    #[arg(long, hide = true)]
-    kitty_compress: bool,
-    /// Force plain base64. Use --kitty-medium base64.
-    #[arg(long, hide = true)]
-    no_kitty_shm: bool,
 }
 
-/// The kitty medium for the session: the deprecated flags win over
-/// the --kitty-medium value when set.
+/// The kitty medium for the session, from the --kitty-medium value.
 fn resolve_medium(cli: &Cli) -> tui::kitty::Medium {
-    if cli.kitty_compress {
-        return tui::kitty::Medium::Base64Zlib;
-    }
-    if cli.no_kitty_shm {
-        return tui::kitty::Medium::Base64;
-    }
     match cli.kitty_medium {
         KittyMedium::Auto => tui::kitty::select_medium_env(false, true),
         KittyMedium::Shm => tui::kitty::Medium::Shm,
@@ -223,8 +198,7 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    let once = cli.once || cli.kitty;
-    if once {
+    if cli.once {
         use crate::tui::{kitty, sixel};
         use chemrust_vis_core::camera::Camera;
         use chemrust_vis_core::viewport::Viewport;
@@ -278,7 +252,7 @@ fn main() -> Result<()> {
         Renderer::Kitty => true,
     };
     let medium = resolve_medium(&cli);
-    let use_delta = cli.kitty_delta || cli.kitty_mode == KittyMode::Delta;
+    let use_delta = cli.kitty_mode == KittyMode::Delta;
     if use_kitty && !tui::kitty::terminal_supports_kitty() {
         eprintln!(
             "Warning: this terminal does not appear to support the kitty \
