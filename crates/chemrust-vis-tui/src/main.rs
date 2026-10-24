@@ -31,6 +31,34 @@ enum Renderer {
     Kitty,
 }
 
+/// Kitty transmission strategy for the interactive TUI.
+#[derive(ValueEnum, Clone, Copy, PartialEq, Eq, Debug)]
+#[clap(name = "kitty-mode")]
+enum KittyMode {
+    /// Full-canvas: one image, in-place data replace. The default.
+    /// No image accumulation; the most robust mode.
+    Full,
+    /// Content-box crop: send only the molecule's box each frame.
+    /// Saves bandwidth on terminals that evict old images (kitty,
+    /// WezTerm). Ghostty does not evict, so images accumulate.
+    Delta,
+}
+
+/// Kitty transmission medium for the interactive TUI.
+#[derive(ValueEnum, Clone, Copy, PartialEq, Eq, Debug)]
+#[clap(name = "kitty-medium")]
+enum KittyMedium {
+    /// Auto: shared memory on local known terminals, plain base64
+    /// over SSH or on unknown terminals.
+    Auto,
+    /// Force POSIX shared memory (local sessions only).
+    Shm,
+    /// Force plain base64.
+    Base64,
+    /// Base64 with a zlib-compressed payload (`o=z`).
+    Zlib,
+}
+
 /// Terminal-first 3D chemical structure visualizer.
 #[derive(Parser)]
 #[command(name = "chemrust-vis-tui", version)]
@@ -53,32 +81,50 @@ struct Cli {
 
     /// Render a single frame as a kitty image and exit (no TUI).
     #[arg(long)]
+    once: bool,
+
+    /// Kitty transmission strategy for the interactive TUI.
+    #[arg(long, value_enum, default_value_t = KittyMode::Full)]
+    kitty_mode: KittyMode,
+
+    /// Kitty transmission medium for the interactive TUI.
+    #[arg(long, value_enum, default_value_t = KittyMedium::Auto)]
+    kitty_medium: KittyMedium,
+
+    // Deprecated aliases, kept for existing commands and hidden
+    // from the help output. Each maps to a current flag.
+    /// One-shot render. Use --once.
+    #[arg(long, hide = true)]
     kitty: bool,
-
-    /// Compress the base64 frame payload with zlib (`o=z`). Enable on
-    /// terminals that implement it; kitty does.
-    #[arg(long)]
-    kitty_compress: bool,
-
-    /// Force plain base64 transmission, even on local known
-    /// terminals that would otherwise use shared memory.
-    #[arg(long)]
-    no_kitty_shm: bool,
-
-    /// Use the full-canvas kitty transmission path: send the whole
-    /// canvas every frame as one image and replace the data in
-    /// place. No content-box crop, no black clear. This is now the
-    /// default; the flag keeps the mode explicit.
-    #[arg(long)]
+    /// Full-canvas strategy. Use --kitty-mode full.
+    #[arg(long, hide = true)]
     kitty_full: bool,
-
-    /// Enable the content-box delta (crop) transmission path: send
-    /// only the molecule's bounding box each frame and clear the
-    /// old position with a small black image. It saves bandwidth on
-    /// terminals that evict old images (kitty, WezTerm). Ghostty
-    /// does not evict, so its images accumulate; avoid it there.
-    #[arg(long)]
+    /// Content-box crop strategy. Use --kitty-mode delta.
+    #[arg(long, hide = true)]
     kitty_delta: bool,
+    /// zlib-compress the base64 payload. Use --kitty-medium zlib.
+    #[arg(long, hide = true)]
+    kitty_compress: bool,
+    /// Force plain base64. Use --kitty-medium base64.
+    #[arg(long, hide = true)]
+    no_kitty_shm: bool,
+}
+
+/// The kitty medium for the session: the deprecated flags win over
+/// the --kitty-medium value when set.
+fn resolve_medium(cli: &Cli) -> tui::kitty::Medium {
+    if cli.kitty_compress {
+        return tui::kitty::Medium::Base64Zlib;
+    }
+    if cli.no_kitty_shm {
+        return tui::kitty::Medium::Base64;
+    }
+    match cli.kitty_medium {
+        KittyMedium::Auto => tui::kitty::select_medium_env(false, true),
+        KittyMedium::Shm => tui::kitty::Medium::Shm,
+        KittyMedium::Base64 => tui::kitty::Medium::Base64,
+        KittyMedium::Zlib => tui::kitty::Medium::Base64Zlib,
+    }
 }
 
 /// Terminal size, falling back to 80x24 when the query fails or
@@ -177,7 +223,8 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    if cli.kitty {
+    let once = cli.once || cli.kitty;
+    if once {
         use crate::tui::{kitty, sixel};
         use chemrust_vis_core::camera::Camera;
         use chemrust_vis_core::viewport::Viewport;
@@ -230,7 +277,8 @@ fn main() -> Result<()> {
         Renderer::Halfblock => false,
         Renderer::Kitty => true,
     };
-    let medium = tui::kitty::select_medium_env(cli.kitty_compress, !cli.no_kitty_shm);
+    let medium = resolve_medium(&cli);
+    let use_delta = cli.kitty_delta || cli.kitty_mode == KittyMode::Delta;
     if use_kitty && !tui::kitty::terminal_supports_kitty() {
         eprintln!(
             "Warning: this terminal does not appear to support the kitty \
@@ -317,10 +365,7 @@ fn main() -> Result<()> {
     let mut app = App::new(scene, cli.file);
     if use_kitty {
         app.enable_kitty(medium);
-        if cli.kitty_full {
-            app.enable_kitty_full_only();
-        }
-        if cli.kitty_delta {
+        if use_delta {
             app.enable_kitty_delta();
         }
     }

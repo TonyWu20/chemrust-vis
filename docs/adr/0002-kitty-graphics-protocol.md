@@ -428,3 +428,17 @@ transmission paths are therefore:
 - `--kitty-delta`: opt-in content-box crop. Saves bandwidth on
   terminals that evict old images (kitty, WezTerm). On Ghostty it
   accumulates images; avoid it there.
+
+CLI regrouping (same date): the kitty flags were reorganized into
+orthogonal axes to remove the `--kitty` one-shot vs `--kitty-*`
+interactive collision. The current surface is:
+
+- `--once`: one-shot single-frame render and exit.
+- `--kitty-mode <full|delta>`: transmission strategy (default full).
+- `--kitty-medium <auto|shm|base64|zlib>`: transmission medium
+  (default auto).
+- `--renderer <auto|kitty|halfblock>`: protocol selection.
+
+The old names `--kitty`, `--kitty-full`, `--kitty-delta`,
+`--kitty-compress`, and `--no-kitty-shm` remain as hidden deprecated
+aliases that map onto the new flags.

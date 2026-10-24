@@ -97,7 +97,7 @@ chemrust-vis/
     chemrust-vis-tui/     # binary crate
       Cargo.toml
       src/
-        main.rs           # entry point, CLI args (--mcp, --kitty, --renderer)
+        main.rs           # entry point, CLI args (--mcp, --once, --renderer, --kitty-mode, --kitty-medium)
         tui/              # TUI application
           mod.rs
           app.rs          # event loop, layout, renderer selection
@@ -200,18 +200,18 @@ switch to a versioned dependency.
   forces it; `--renderer halfblock` forces the universal fallback. The
   image places below the text layer (z-index -1), so the status bar and
   axis indicator stay readable. Re-transmits only on camera, viewport,
-  or terminal-size change. One-shot `--kitty` prints a single frame.
-  The frame crops to the scene content's cell rectangle and clears
-  the old rectangle with a 1x1 black tile (fifth amendment).
-  Transmission medium follows the session: shared memory (`t=s`) on
-  local known terminals, plain base64 over SSH and on unknown
-  terminals, `--kitty-compress` for the zlib path (`o=z`), and
-  `--no-kitty-shm` to force base64. The full-canvas path (one image,
-  in-place data replace) is the default. `--kitty-full` makes it
-  explicit. `--kitty-delta` opts into the content-box crop, which
-  saves bandwidth on terminals that evict old images but accumulates
-  on Ghostty (ADR-0002 amendment 6). The status bar shows the
-  medium with the frame size.
+  or terminal-size change. One-shot `--once` prints a single frame and
+  exits. The interactive strategy is chosen by `--kitty-mode`:
+  `full` (default) sends the whole canvas as one image and replaces
+  the data in place; `delta` crops to the scene content's cell
+  rectangle, clears the old rectangle with an 8x8 black image, and
+  uses a fresh monotonic image id per frame. The medium is chosen by
+  `--kitty-medium`: `auto` (default, shared memory on local known
+  terminals and plain base64 over SSH), `shm`, `base64`, or `zlib`
+  (`o=z`). The old flags `--kitty`, `--kitty-full`, `--kitty-delta`,
+  `--kitty-compress`, and `--no-kitty-shm` remain as hidden
+  deprecated aliases. The status bar shows the medium with the frame
+  size (ADR-0002 amendment 6).
   Terminal responses are suppressed with `q=1` so the protocol's
   `i=1;OK` replies cannot be parsed as key input and drive the camera
   (amendment 2026-10-14, ADR-0002). `=` is not a key binding.
